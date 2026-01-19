@@ -1,0 +1,108 @@
+{
+<<<<<<< Updated upstream
+  "name": "llm-secrets",
+  "productName": "LLM Secrets",
+  "version": "3.0.12",
+  "description": "Secure secrets management for LLM agents with Windows Hello protection",
+=======
+  "name": "simple-secret",
+  "productName": "Simple Secret",
+  "version": "3.0.14",
+  "description": "Simplified secrets management with Windows Hello - choose Simple or Advanced security",
+>>>>>>> Stashed changes
+  "main": ".webpack/main",
+  "private": true,
+  "scripts": {
+    "start": "electron-forge start",
+    "package": "electron-forge package",
+    "make": "electron-forge make",
+    "publish": "electron-forge publish",
+    "lint": "eslint --ext .ts,.tsx .",
+    "test": "jest",
+    "build": "electron-builder",
+    "build:prod": "bun run package && bun run scripts/build-obfuscated.ts",
+    "build:prod:parallel": "bun run package && bun run scripts/build-obfuscated-parallel.ts",
+    "build:prod:fast": "bun run package && bun run scripts/build-obfuscated-parallel.ts --fast",
+    "make:prod": "bun run build:prod && bun run make",
+    "make:prod:parallel": "bun run build:prod:parallel && bun run make",
+    "make:prod:fast": "bun run build:prod:fast && bun run make"
+  },
+  "keywords": [
+    "encryption",
+    "secrets",
+    "env",
+    "security",
+    "windows-hello"
+  ],
+  "author": {
+    "name": "VestedJosh",
+    "email": "josh@lendvest.io"
+  },
+  "license": "AGPL-3.0",
+  "build": {
+    "appId": "com.vestedjosh.llm-secrets",
+    "productName": "LLM Secrets",
+    "win": {
+      "target": [
+        "nsis",
+        "msi"
+      ],
+      "icon": "assets/icon.ico"
+    },
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "icon": "assets/icon.icns"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "icon": "assets/icon.png"
+    }
+  },
+  "devDependencies": {
+    "@electron-forge/cli": "^7.11.1",
+    "@electron-forge/maker-deb": "^7.11.1",
+    "@electron-forge/maker-rpm": "^7.11.1",
+    "@electron-forge/maker-squirrel": "^7.11.1",
+    "@electron-forge/maker-zip": "^7.11.1",
+    "@electron-forge/plugin-auto-unpack-natives": "^7.11.1",
+    "@electron-forge/plugin-fuses": "^7.11.1",
+    "@electron-forge/plugin-webpack": "^7.11.1",
+    "@electron/fuses": "^1.8.0",
+    "@types/jest": "^30.0.0",
+    "@types/node": "^25.0.8",
+    "@typescript-eslint/eslint-plugin": "^5.62.0",
+    "@typescript-eslint/parser": "^5.62.0",
+    "@vercel/webpack-asset-relocator-loader": "^1.7.3",
+    "css-loader": "^6.11.0",
+    "electron": "39.2.7",
+    "electron-builder": "^26.4.0",
+    "eslint": "^8.57.1",
+    "eslint-plugin-import": "^2.32.0",
+    "fork-ts-checker-webpack-plugin": "^7.3.0",
+    "javascript-obfuscator": "^4.1.1",
+    "jest": "^30.2.0",
+    "node-loader": "^2.1.0",
+    "puppeteer": "^24.35.0",
+    "style-loader": "^3.3.4",
+    "to-ico": "^1.1.5",
+    "ts-jest": "^29.4.6",
+    "ts-loader": "^9.5.4",
+    "ts-node": "^10.9.2",
+    "typescript": "~4.5.4"
+  },
+  "dependencies": {
+    "@types/react": "^19.2.8",
+    "@types/react-dom": "^19.2.3",
+    "electron-squirrel-startup": "^1.0.1",
+    "ethers": "^6.16.0",
+    "keytar": "^7.9.0",
+    "react": "^19.2.3",
+    "react-dom": "^19.2.3"
+  }
+}

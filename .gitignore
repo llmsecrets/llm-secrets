@@ -1,0 +1,164 @@
+# ========================================
+# Simple Secret - .gitignore
+# ========================================
+
+# ----------------------------------------
+# Secrets & Encrypted Files
+# NEVER commit these
+# ----------------------------------------
+.env
+.env.*
+*.encrypted
+!.env.example
+credentials/
+secrets/
+master-key*
+*.key
+
+# ----------------------------------------
+# Build Outputs
+# ----------------------------------------
+dist/
+out/
+build/
+release/
+*.exe
+*.msi
+*.dmg
+*.AppImage
+*.deb
+*.rpm
+
+# ----------------------------------------
+# Dependencies
+# ----------------------------------------
+node_modules/
+.npm/
+.yarn/
+.pnp.*
+
+# ----------------------------------------
+# IDE & Editor
+# ----------------------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.settings/
+*.sublime-*
+
+# ----------------------------------------
+# OS Generated
+# ----------------------------------------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+
+# ----------------------------------------
+# Logs & Debug
+# ----------------------------------------
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+.pnpm-debug.log*
+
+# ----------------------------------------
+# Testing
+# ----------------------------------------
+coverage/
+.nyc_output/
+test-results/
+test-sandbox/
+*.test-backup
+*.test-overwrite
+
+# ----------------------------------------
+# QA & Internal
+# ----------------------------------------
+QA/
+QA Human Feedback/
+ralph-template/
+*.bak
+*.backup
+
+# ----------------------------------------
+# Webpack & Build Cache
+# ----------------------------------------
+.webpack/
+.cache/
+.parcel-cache/
+*.tsbuildinfo
+
+# ----------------------------------------
+# Electron Specific
+# ----------------------------------------
+.webpack/
+out/
+.erb/
+release/build/
+
+# ----------------------------------------
+# Large Binaries (distribute separately)
+# ----------------------------------------
+*.exe
+Simple-Secret-*.exe
+psst.exe
+scrt.exe
+
+# ----------------------------------------
+# Stripe/Webhook Server (keep private)
+# ----------------------------------------
+webhook-server/
+
+# ----------------------------------------
+# Version History (keep only current)
+# ----------------------------------------
+*.v[0-9]
+*.v[0-9][0-9]
+.env.encrypted.v*
+
+# ----------------------------------------
+# Temporary Files
+# ----------------------------------------
+tmp/
+temp/
+*.tmp
+*.temp
+*.bak
+
+# ----------------------------------------
+# Documentation Build
+# ----------------------------------------
+docs/_build/
+site/
+
+# ----------------------------------------
+# Python (if any scripts)
+# ----------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+venv/
+.venv/
+
+# ----------------------------------------
+# .NET (if WPF app included)
+# ----------------------------------------
+bin/
+obj/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+packages/

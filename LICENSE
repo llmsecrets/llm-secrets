@@ -1,0 +1,146 @@
+LLM SECRETS DESKTOP APPLICATION LICENSE
+=======================================
+
+Copyright (c) 2025 LLM Secrets. All Rights Reserved.
+
+Based on Elastic License 2.0 (ELv2)
+
+
+ACCEPTANCE
+----------
+
+By using the software, you agree to all of the terms and conditions below.
+
+
+COPYRIGHT LICENSE
+-----------------
+
+The licensor grants you a non-exclusive, royalty-free, worldwide,
+non-sublicensable, non-transferable license to use, copy, and prepare
+derivative works of the software, subject to the limitations below.
+
+
+LIMITATIONS
+-----------
+
+1. You may not provide the software to third parties as a hosted or managed
+   service, where the service provides users with access to any substantial
+   set of the features or functionality of the software.
+
+2. You may not move, change, disable, or circumvent the license key
+   functionality in the software, and you may not remove or obscure any
+   functionality in the software that is protected by the license key.
+
+3. You may not alter, remove, or obscure any licensing, copyright, or other
+   notices of the licensor in the software.
+
+4. You may not redistribute the software (source or binary) without written
+   permission from the licensor.
+
+5. You may not use the LLM Secrets name, logo, or branding to market
+   derivative works without written permission.
+
+6. You may not sell the software or derivative works without a commercial
+   license from the licensor.
+
+
+PERMITTED USES
+--------------
+
+You MAY:
+
+- View and audit the source code for security purposes
+- Build from source for personal, non-commercial use
+- Report security vulnerabilities
+- Learn from the codebase
+- Use the software with a valid license key
+
+
+OPEN SOURCE COMPONENTS
+----------------------
+
+The following components are licensed under the Apache License 2.0 and are
+fully open source:
+
+- crypto-core/ (EnvCrypto.psm1, WindowsHelloAuth.cs, encryption logic)
+- cli/ (scrt CLI tool and all commands)
+- npm-package/ (CLI distribution package)
+
+See LICENSE-APACHE for full terms of those components.
+
+This dual-licensing ensures you can audit the cryptographic code that protects
+your secrets while allowing us to sustain development of the desktop application.
+
+
+ENCRYPTION DISCLAIMER
+---------------------
+
+This software uses AES-256 encryption and Windows Hello authentication.
+
+NO WARRANTY is provided that encryption will be unbreakable or that data will
+be recoverable if:
+
+- Master key is lost
+- Windows Hello authentication fails
+- Hardware or software failures occur
+
+You are solely responsible for:
+
+- Backing up your master encryption key
+- Testing the recovery process before relying on the system
+- Maintaining backups of important data
+
+
+NO WARRANTY
+-----------
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT.
+
+
+LIMITATION OF LIABILITY
+-----------------------
+
+IN NO EVENT SHALL THE LICENSOR BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+
+TERMINATION
+-----------
+
+Your license terminates automatically if you violate these terms.
+
+
+EXPORT CONTROL
+--------------
+
+This software contains encryption technology and may be subject to export
+control laws. You are responsible for compliance with applicable laws.
+
+
+PURCHASING A LICENSE
+--------------------
+
+For commercial use, redistribution rights, or to purchase a license:
+
+Website: https://llmsecrets.com
+Email: support@llmsecrets.com
+
+
+DEFINITIONS
+-----------
+
+"Licensor" means LLM Secrets.
+"Software" means the LLM Secrets Desktop Application.
+"License key" means the mechanism used to validate your authorized use.
+
+
+---
+
+Last Updated: January 2025
+License Version: 2.0 (Source Available)

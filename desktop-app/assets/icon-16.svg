@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
+  <!-- Background with rounded corners -->
+  <rect x="0" y="0" width="16" height="16" rx="2.88" fill="#0f172a"/>
+
+  <!-- Lock body -->
+  <g transform="translate(1.92, 3.2) scale(0.16)">
+    <!-- Lock shackle (curved top part) -->
+    <path d="M25 35 L25 22 C25 10 40 10 40 22 L40 35"
+          stroke="#fbbf24" stroke-width="6" fill="none" stroke-linecap="round"/>
+
+    <!-- Lock body (rectangle) -->
+    <rect x="15" y="35" width="35" height="30" rx="4" fill="#fbbf24"/>
+
+    <!-- Keyhole -->
+    <circle cx="32.5" cy="47" r="5" fill="#0f172a"/>
+    <rect x="30" y="47" width="5" height="10" fill="#0f172a"/>
+  </g>
+
+  <!-- Key -->
+  <g transform="translate(7.2, 7.2) scale(0.16)">
+    <!-- Key head (circle) -->
+    <circle cx="35" cy="25" r="12" stroke="#60a5fa" stroke-width="4" fill="none"/>
+
+    <!-- Key shaft -->
+    <line x1="35" y1="37" x2="35" y2="65" stroke="#60a5fa" stroke-width="4" stroke-linecap="round"/>
+
+    <!-- Key teeth -->
+    <line x1="35" y1="55" x2="42" y2="55" stroke="#60a5fa" stroke-width="4" stroke-linecap="round"/>
+    <line x1="35" y1="62" x2="40" y2="62" stroke="#60a5fa" stroke-width="4" stroke-linecap="round"/>
+  </g>
+</svg>
