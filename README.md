@@ -130,6 +130,10 @@ For the desktop app, please open an issue first to discuss changes.
 - **Docs**: [docs.llmsecrets.com](https://docs.llmsecrets.com)
 - **Issues**: [GitHub Issues](https://github.com/llmsecrets/llm-secrets/issues)
 
+## Acknowledgments
+
+This project was inspired by [psst](https://github.com/Michaelliv/psst) by Michael Livshiz - a tool for protecting secrets from LLM context. We built upon this concept to create a Windows Hello-integrated solution for AI coding assistants.
+
 ---
 
 Made with care for developers who value their secrets.
