@@ -1,0 +1,871 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Documentation - LLM Secrets</title>
+  <meta name="description" content="Complete documentation for LLM Secrets. Learn how to protect your .env secrets from Claude Code using Windows Hello encryption.">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔐</text></svg>">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --trust-blue: #2563eb;
+      --trust-blue-hover: #1d4ed8;
+      --trust-blue-light: rgba(37, 99, 235, 0.1);
+      --success-green: #16a34a;
+      --success-green-light: rgba(22, 163, 74, 0.1);
+      --warning-amber: #f59e0b;
+      --danger-red: #dc2626;
+      --dark-gray: #0f172a;
+      --medium-gray: #64748b;
+      --light-gray: #f1f5f9;
+      --background: #ffffff;
+      --card-background: #ffffff;
+      --text-primary: #0f172a;
+      --text-secondary: #64748b;
+      --border-color: rgba(0, 0, 0, 0.1);
+      --shadow: rgba(0, 0, 0, 0.1);
+      --code-bg: #1e293b;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+      background: var(--background);
+      color: var(--text-primary);
+      line-height: 1.7;
+    }
+
+    /* Navigation */
+    nav {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      background: rgba(255, 255, 255, 0.95);
+      backdrop-filter: blur(10px);
+      border-bottom: 1px solid var(--border-color);
+      z-index: 1000;
+      padding: 1rem 0;
+    }
+
+    .nav-content {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 0 2rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      font-size: 1.5rem;
+      font-weight: 700;
+      color: var(--dark-gray);
+      text-decoration: none;
+    }
+
+    .logo-icon {
+      width: 40px;
+      height: 40px;
+      background: var(--dark-gray);
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.25rem;
+    }
+
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 2rem;
+    }
+
+    .nav-links a {
+      color: var(--text-secondary);
+      text-decoration: none;
+      font-weight: 500;
+      font-size: 0.95rem;
+      transition: color 0.2s;
+    }
+
+    .nav-links a:hover, .nav-links a.active {
+      color: var(--dark-gray);
+    }
+
+    /* Layout */
+    .docs-layout {
+      display: flex;
+      max-width: 1400px;
+      margin: 0 auto;
+      padding-top: 80px;
+    }
+
+    /* Sidebar */
+    .sidebar {
+      width: 280px;
+      position: fixed;
+      top: 80px;
+      left: max(0px, calc((100vw - 1400px) / 2));
+      height: calc(100vh - 80px);
+      overflow-y: auto;
+      padding: 2rem;
+      border-right: 1px solid var(--border-color);
+    }
+
+    .sidebar-section {
+      margin-bottom: 2rem;
+    }
+
+    .sidebar-title {
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--medium-gray);
+      margin-bottom: 0.75rem;
+    }
+
+    .sidebar-links {
+      list-style: none;
+    }
+
+    .sidebar-links a {
+      display: block;
+      padding: 0.5rem 0.75rem;
+      margin: 0.125rem 0;
+      color: var(--text-secondary);
+      text-decoration: none;
+      font-size: 0.9rem;
+      border-radius: 6px;
+      transition: all 0.2s;
+    }
+
+    .sidebar-links a:hover {
+      background: var(--light-gray);
+      color: var(--text-primary);
+    }
+
+    .sidebar-links a.active {
+      background: var(--trust-blue-light);
+      color: var(--trust-blue);
+      font-weight: 500;
+    }
+
+    /* Main content */
+    .docs-content {
+      flex: 1;
+      margin-left: 280px;
+      padding: 3rem 4rem;
+      max-width: 900px;
+    }
+
+    .docs-content h1 {
+      font-size: 2.5rem;
+      font-weight: 700;
+      margin-bottom: 1rem;
+      color: var(--dark-gray);
+    }
+
+    .docs-content h2 {
+      font-size: 1.75rem;
+      font-weight: 600;
+      margin-top: 3rem;
+      margin-bottom: 1rem;
+      padding-top: 1.5rem;
+      border-top: 1px solid var(--border-color);
+      color: var(--dark-gray);
+    }
+
+    .docs-content h2:first-of-type {
+      margin-top: 2rem;
+      border-top: none;
+      padding-top: 0;
+    }
+
+    .docs-content h3 {
+      font-size: 1.25rem;
+      font-weight: 600;
+      margin-top: 2rem;
+      margin-bottom: 0.75rem;
+      color: var(--dark-gray);
+    }
+
+    .docs-content p {
+      margin-bottom: 1rem;
+      color: var(--text-secondary);
+    }
+
+    .docs-content ul, .docs-content ol {
+      margin-bottom: 1rem;
+      padding-left: 1.5rem;
+      color: var(--text-secondary);
+    }
+
+    .docs-content li {
+      margin-bottom: 0.5rem;
+    }
+
+    .docs-content a {
+      color: var(--trust-blue);
+      text-decoration: none;
+    }
+
+    .docs-content a:hover {
+      text-decoration: underline;
+    }
+
+    /* Code blocks */
+    pre {
+      background: var(--code-bg);
+      border-radius: 8px;
+      padding: 1.25rem;
+      overflow-x: auto;
+      margin-bottom: 1.5rem;
+    }
+
+    code {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.9rem;
+    }
+
+    pre code {
+      color: #e2e8f0;
+    }
+
+    :not(pre) > code {
+      background: var(--light-gray);
+      padding: 0.2rem 0.4rem;
+      border-radius: 4px;
+      color: var(--dark-gray);
+      font-size: 0.85rem;
+    }
+
+    /* Callouts */
+    .callout {
+      padding: 1rem 1.25rem;
+      border-radius: 8px;
+      margin-bottom: 1.5rem;
+      border-left: 4px solid;
+    }
+
+    .callout-info {
+      background: var(--trust-blue-light);
+      border-color: var(--trust-blue);
+    }
+
+    .callout-warning {
+      background: rgba(245, 158, 11, 0.1);
+      border-color: var(--warning-amber);
+    }
+
+    .callout-success {
+      background: var(--success-green-light);
+      border-color: var(--success-green);
+    }
+
+    .callout-title {
+      font-weight: 600;
+      margin-bottom: 0.25rem;
+      color: var(--text-primary);
+    }
+
+    .callout p {
+      margin: 0;
+      font-size: 0.95rem;
+    }
+
+    /* Platform badge */
+    .platform-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      background: var(--trust-blue-light);
+      color: var(--trust-blue);
+      padding: 0.5rem 1rem;
+      border-radius: 8px;
+      font-size: 0.9rem;
+      font-weight: 500;
+      margin-bottom: 1.5rem;
+    }
+
+    .platform-badge svg {
+      flex-shrink: 0;
+    }
+
+    .windows-notice {
+      background: linear-gradient(135deg, #0078d4 0%, #00bcf2 100%);
+      color: white;
+      padding: 1.25rem 1.5rem;
+      border-radius: 12px;
+      margin-bottom: 2rem;
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+    }
+
+    .windows-notice svg {
+      flex-shrink: 0;
+      width: 32px;
+      height: 32px;
+    }
+
+    .windows-notice-content {
+      flex: 1;
+    }
+
+    .windows-notice-title {
+      font-weight: 600;
+      font-size: 1rem;
+      margin-bottom: 0.25rem;
+    }
+
+    .windows-notice-text {
+      font-size: 0.9rem;
+      opacity: 0.9;
+    }
+
+    /* Table */
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 1.5rem;
+      font-size: 0.9rem;
+    }
+
+    th, td {
+      text-align: left;
+      padding: 0.75rem 1rem;
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    th {
+      background: var(--light-gray);
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+
+    td {
+      color: var(--text-secondary);
+    }
+
+    /* Badge */
+    .badge {
+      display: inline-block;
+      padding: 0.25rem 0.5rem;
+      font-size: 0.75rem;
+      font-weight: 500;
+      border-radius: 4px;
+      text-transform: uppercase;
+    }
+
+    .badge-cli {
+      background: var(--success-green-light);
+      color: var(--success-green);
+    }
+
+    .badge-desktop {
+      background: rgba(139, 92, 246, 0.1);
+      color: #8b5cf6;
+    }
+
+    /* Responsive */
+    @media (max-width: 1024px) {
+      .sidebar {
+        display: none;
+      }
+      .docs-content {
+        margin-left: 0;
+        padding: 2rem;
+      }
+    }
+
+    @media (max-width: 640px) {
+      .docs-content h1 {
+        font-size: 2rem;
+      }
+      .nav-links {
+        display: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <nav>
+    <div class="nav-content">
+      <a href="https://llmsecrets.com" class="logo">
+        <span class="logo-icon">🔐</span>
+        LLM Secrets
+      </a>
+      <div class="nav-links">
+        <a href="https://llmsecrets.com">Home</a>
+        <a href="#" class="active">Docs</a>
+        <a href="https://github.com/llmsecrets/llm-secrets" target="_blank">GitHub</a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="docs-layout">
+    <aside class="sidebar">
+      <div class="sidebar-section">
+        <div class="sidebar-title">Getting Started</div>
+        <ul class="sidebar-links">
+          <li><a href="#introduction" class="active">Introduction</a></li>
+          <li><a href="#installation">Installation</a></li>
+          <li><a href="#quick-start">Quick Start</a></li>
+          <li><a href="#encrypt-decrypt">Encrypt & Manage Secrets</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <div class="sidebar-title">Core Concepts</div>
+        <ul class="sidebar-links">
+          <li><a href="#how-it-works">How It Works</a></li>
+          <li><a href="#security-model">Security Model</a></li>
+          <li><a href="#modes">Simple vs Advanced Mode</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <div class="sidebar-title">Usage</div>
+        <ul class="sidebar-links">
+          <li><a href="#claude-code">With Claude Code</a></li>
+          <li><a href="#commands">Commands Reference</a></li>
+          <li><a href="#env-variables">Environment Variables</a></li>
+        </ul>
+      </div>
+      <div class="sidebar-section">
+        <div class="sidebar-title">Advanced</div>
+        <ul class="sidebar-links">
+          <li><a href="#backup-restore">Backup & Restore</a></li>
+          <li><a href="#licensing">Licensing</a></li>
+          <li><a href="#security-faq">Security FAQ</a></li>
+          <li><a href="#troubleshooting">Troubleshooting</a></li>
+        </ul>
+      </div>
+    </aside>
+
+    <main class="docs-content">
+      <h1 id="introduction">Introduction</h1>
+
+      <div class="windows-notice">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M0 3.449L9.75 2.1v9.451H0m10.949-9.602L24 0v11.4H10.949M0 12.6h9.75v9.451L0 20.699M10.949 12.6H24V24l-12.9-1.801"/></svg>
+        <div class="windows-notice-content">
+          <div class="windows-notice-title">Windows 10/11 Only</div>
+          <div class="windows-notice-text">LLM Secrets requires Windows 10 or 11 with Windows Hello enabled. WSL is fully supported. macOS/Linux coming soon.</div>
+        </div>
+      </div>
+
+      <p>LLM Secrets protects your <code>.env</code> files from AI coding assistants like Claude Code. Your secrets are encrypted with Windows Hello and only decrypted at runtime in isolated subprocesses.</p>
+
+      <div class="callout callout-info">
+        <div class="callout-title">Key Principle</div>
+        <p>Claude Code can <strong>use</strong> your secrets without ever <strong>seeing</strong> them. Commands run with injected environment variables, but the actual values never appear in Claude's context.</p>
+      </div>
+
+      <h2 id="installation">Installation</h2>
+
+      <div class="platform-badge">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M0 3.449L9.75 2.1v9.451H0m10.949-9.602L24 0v11.4H10.949M0 12.6h9.75v9.451L0 20.699M10.949 12.6H24V24l-12.9-1.801"/></svg>
+        <span>Windows 10/11 + WSL</span>
+      </div>
+
+      <h3>Prerequisites</h3>
+      <ul>
+        <li><strong>Windows 10 or Windows 11</strong> (required)</li>
+        <li><strong>Windows Hello</strong> enabled (PIN, fingerprint, or face recognition)</li>
+        <li>Node.js 14+ (for npm install)</li>
+        <li>PowerShell 5.1 or later (pre-installed on Windows 10/11)</li>
+      </ul>
+
+      <div class="callout callout-warning">
+        <div class="callout-title">Windows Only</div>
+        <p>LLM Secrets uses Windows Hello for biometric/PIN authentication. macOS and Linux support is on the roadmap.</p>
+      </div>
+
+      <h3>CLI Installation <span class="badge badge-cli">Free</span></h3>
+      <pre><code>npm install -g https://cli.llmsecrets.com/llm-secrets-3.1.0.tgz</code></pre>
+
+      <h3>Desktop App <span class="badge badge-desktop">$10</span></h3>
+      <p>Download the installer from the <a href="https://llmsecrets.com/download.html">downloads page</a>.</p>
+
+      <h2 id="quick-start">Quick Start</h2>
+
+      <h3>1. Install the CLI</h3>
+      <pre><code>npm install -g https://cli.llmsecrets.com/llm-secrets-3.1.0.tgz</code></pre>
+
+      <h3>2. Encrypt Your Existing .env File</h3>
+      <p>Navigate to your project and run setup:</p>
+      <pre><code>cd your-project
+scrt setup</code></pre>
+      <p>Or specify the path to your .env:</p>
+      <pre><code>scrt setup C:\path\to\your\.env</code></pre>
+
+      <div class="callout callout-success">
+        <div class="callout-title">What happens during setup</div>
+        <p>Windows Hello authentication → Your original .env is backed up → .env.encrypted is created. <strong>Your original .env is never deleted.</strong></p>
+      </div>
+
+      <h3>3. View Your Secrets</h3>
+      <pre><code># View all secrets (authenticates automatically)
+scrt view
+
+# View a specific secret
+scrt view STRIPE_SECRET_KEY</code></pre>
+
+      <h3>4. Run Commands with Secrets</h3>
+      <pre><code>scrt run -- npm run deploy</code></pre>
+
+      <h2 id="encrypt-decrypt">Encrypting &amp; Managing Secrets</h2>
+
+      <h3>Encrypt Existing Secrets (First Time)</h3>
+      <pre><code># In your project directory with a .env file:
+scrt setup
+
+# Or specify path:
+scrt setup /path/to/.env</code></pre>
+
+      <p>This creates:</p>
+      <table>
+        <tr>
+          <th>File</th>
+          <th>Description</th>
+        </tr>
+        <tr>
+          <td><code>.env</code></td>
+          <td>Your original (unchanged)</td>
+        </tr>
+        <tr>
+          <td><code>.env.backup</code></td>
+          <td>Backup copy</td>
+        </tr>
+        <tr>
+          <td><code>.env.encrypted</code></td>
+          <td>Encrypted version (commit this to git)</td>
+        </tr>
+      </table>
+
+      <h3>View Secrets</h3>
+      <pre><code># Authenticates with Windows Hello and shows all secrets
+scrt view
+
+# Show only a specific secret
+scrt view API_KEY</code></pre>
+
+      <h3>Add or Edit Secrets</h3>
+      <pre><code># Step 1: Decrypt to .env for editing
+scrt decrypt
+
+# Step 2: Edit .env in your text editor (opens automatically)
+
+# Step 3: Re-encrypt when done
+scrt encrypt --force</code></pre>
+
+      <div class="callout callout-warning">
+        <div class="callout-title">Important</div>
+        <p>After decrypting, your <code>.env</code> file contains plaintext secrets. Always run <code>scrt encrypt --force</code> when you're done editing.</p>
+      </div>
+
+      <h3>Add to .gitignore</h3>
+      <pre><code>.env
+.env.backup</code></pre>
+      <p>Only commit <code>.env.encrypted</code> to your repository.</p>
+
+      <h2 id="how-it-works">How It Works</h2>
+
+      <p>The injection mechanism is simple:</p>
+
+      <pre><code>┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│  Your Command   │ --> │  Scrt injects   │ --> │  Command runs   │
+│  (no secrets)   │     │  $env:VARS      │     │  with secrets   │
+└─────────────────┘     └─────────────────┘     └─────────────────┘</code></pre>
+
+      <ol>
+        <li><strong>Encryption at rest</strong> - Your <code>.env</code> is encrypted with AES-256-CBC</li>
+        <li><strong>Windows Hello unlock</strong> - Master key protected by DPAPI + Windows Hello</li>
+        <li><strong>Runtime injection</strong> - Secrets decrypted only in subprocess environment</li>
+        <li><strong>Isolation</strong> - Values never return to parent process or Claude's context</li>
+      </ol>
+
+      <h2 id="security-model">Security Model</h2>
+
+      <table>
+        <tr>
+          <th>Claude CAN See</th>
+          <th>Claude CANNOT See</th>
+        </tr>
+        <tr>
+          <td>Secret names (e.g., <code>PRIVATE_KEY</code>)</td>
+          <td>Secret values (e.g., <code>0x7f3a...</code>)</td>
+        </tr>
+        <tr>
+          <td>Command structure</td>
+          <td>Decrypted environment variables</td>
+        </tr>
+        <tr>
+          <td>Transaction hashes</td>
+          <td>Private keys or tokens</td>
+        </tr>
+        <tr>
+          <td>Success/failure messages</td>
+          <td>Passwords or API secrets</td>
+        </tr>
+      </table>
+
+      <h2 id="modes">Simple vs Advanced Mode</h2>
+
+      <table>
+        <tr>
+          <th>Feature</th>
+          <th>Simple Mode</th>
+          <th>Advanced Mode</th>
+        </tr>
+        <tr>
+          <td>Authentication</td>
+          <td>Windows Hello only</td>
+          <td>Windows Hello + KeePass password</td>
+        </tr>
+        <tr>
+          <td>Master key storage</td>
+          <td>DPAPI encrypted</td>
+          <td>KeePass database</td>
+        </tr>
+        <tr>
+          <td>Best for</td>
+          <td>Daily use, personal machines</td>
+          <td>High-security, shared machines</td>
+        </tr>
+      </table>
+
+      <h2 id="claude-code">Using with Claude Code</h2>
+
+      <p>Claude Code automatically has access to use your secrets via the <code>$env:SECRET_NAME</code> syntax.</p>
+
+      <h3>Example: Deploy a Smart Contract</h3>
+      <pre><code># Claude writes this command:
+forge script script/Deploy.s.sol \
+  --rpc-url $env:ALCHEMY_RPC_URL \
+  --private-key $env:PRIVATE_KEY \
+  --broadcast
+
+# Scrt injects the actual values at runtime
+# Claude never sees your private key</code></pre>
+
+      <h3>Example: Push to GitHub</h3>
+      <pre><code>git push https://$env:GITHUB_PAT@github.com/user/repo.git</code></pre>
+
+      <h3>Example: Deploy to Vercel</h3>
+      <pre><code>vercel --token $env:VERCEL_TOKEN --prod</code></pre>
+
+      <div class="callout callout-warning">
+        <div class="callout-title">Important</div>
+        <p>Claude should <strong>never</strong> run <code>scrt decrypt</code> or <code>scrt view</code>. These commands expose secret values. If you need to edit secrets, run these commands yourself.</p>
+      </div>
+
+      <h2 id="commands">Commands Reference</h2>
+
+      <table>
+        <tr>
+          <th>Command</th>
+          <th>Description</th>
+        </tr>
+        <tr>
+          <td><code>scrt setup [path]</code></td>
+          <td>First-time setup: encrypt existing .env file</td>
+        </tr>
+        <tr>
+          <td><code>scrt view [name]</code></td>
+          <td>Auth + view secrets (all or specific)</td>
+        </tr>
+        <tr>
+          <td><code>scrt auth</code></td>
+          <td>Start Windows Hello session</td>
+        </tr>
+        <tr>
+          <td><code>scrt decrypt</code></td>
+          <td>Decrypt .env.encrypted to .env for editing</td>
+        </tr>
+        <tr>
+          <td><code>scrt encrypt --force</code></td>
+          <td>Encrypt .env to .env.encrypted</td>
+        </tr>
+        <tr>
+          <td><code>scrt list</code></td>
+          <td>List secret names (not values)</td>
+        </tr>
+        <tr>
+          <td><code>scrt run -- &lt;cmd&gt;</code></td>
+          <td>Run command with secrets injected</td>
+        </tr>
+        <tr>
+          <td><code>scrt status</code></td>
+          <td>Show session status</td>
+        </tr>
+        <tr>
+          <td><code>scrt help</code></td>
+          <td>Show all commands</td>
+        </tr>
+      </table>
+
+      <h2 id="env-variables">Environment Variables</h2>
+
+      <p>Add secrets to your <code>.env</code> file using standard format:</p>
+
+      <pre><code>PRIVATE_KEY=0x...
+ALCHEMY_RPC_URL=https://eth-mainnet.g.alchemy.com/v2/...
+GITHUB_PAT=ghp_...
+VERCEL_TOKEN=...
+GODADDY_API_KEY=...
+GODADDY_API_SECRET=...</code></pre>
+
+      <p>Reference them in commands as <code>$env:SECRET_NAME</code>.</p>
+
+      <h2 id="backup-restore">Backup & Restore</h2>
+
+      <p>LLM Secrets supports encrypted cloud backups:</p>
+
+      <ul>
+        <li><strong>Automatic backups</strong> - Configurable frequency (daily, weekly, monthly)</li>
+        <li><strong>Recovery password</strong> - Separate from Windows Hello, for disaster recovery</li>
+        <li><strong>Cross-machine restore</strong> - Restore secrets on a new Windows machine</li>
+      </ul>
+
+      <h2 id="licensing">Licensing</h2>
+
+      <p>LLM Secrets uses a <strong>dual-license model</strong> to balance transparency and sustainability:</p>
+
+      <table>
+        <tr>
+          <th>Component</th>
+          <th>License</th>
+          <th>You Can</th>
+        </tr>
+        <tr>
+          <td><strong>Crypto Core</strong> (EnvCrypto.psm1, WindowsHelloAuth.cs)</td>
+          <td>Apache 2.0</td>
+          <td>Use, modify, sell, anything</td>
+        </tr>
+        <tr>
+          <td><strong>CLI Tool</strong> (<code>scrt</code> commands)</td>
+          <td>Apache 2.0</td>
+          <td>Use, modify, sell, anything</td>
+        </tr>
+        <tr>
+          <td><strong>Desktop App</strong></td>
+          <td>Source Available</td>
+          <td>View, audit, build for personal use</td>
+        </tr>
+        <tr>
+          <td><strong>Desktop App</strong> (with license)</td>
+          <td>Paid License</td>
+          <td>Commercial use, official builds</td>
+        </tr>
+      </table>
+
+      <h3>Why This Model?</h3>
+      <p>Security software should be auditable. You can read every line of cryptographic code to verify there are no backdoors. The paid license for the desktop app supports continued development.</p>
+
+      <h3>Apache 2.0 (CLI & Crypto Core)</h3>
+      <p>The encryption core and CLI are fully open source under the Apache 2.0 license:</p>
+      <ul>
+        <li>Use for any purpose (personal, commercial)</li>
+        <li>Modify and create derivative works</li>
+        <li>Distribute and sublicense</li>
+        <li>Use in proprietary software</li>
+      </ul>
+
+      <h3>Source Available (Desktop App)</h3>
+      <p>The desktop application source code is available for security auditing:</p>
+      <ul>
+        <li><strong>You may:</strong> View code, audit for security, build for personal use, report vulnerabilities</li>
+        <li><strong>You may not:</strong> Redistribute, sell, remove license key system, provide as hosted service</li>
+      </ul>
+
+      <div class="callout callout-info">
+        <div class="callout-title">Verify Our Code</div>
+        <p>All source code is available on <a href="https://github.com/llmsecrets/llm-secrets">GitHub</a>. Security researchers can verify there are no backdoors in the encryption.</p>
+      </div>
+
+      <h2 id="security-faq">Security FAQ</h2>
+      <p><em>The following answers are from <a href="https://deepwiki.com/llmsecrets/llm-secrets" target="_blank">DeepWiki</a>, an independent third-party AI analysis of this codebase. Use their chatbot to ask your own security questions.</em></p>
+
+      <h3>Can LLM Secrets, the developers, or Claude ever see my decrypted secrets?</h3>
+      <p><strong>No.</strong> Here's why:</p>
+      <ul>
+        <li><strong>Client-side only</strong> - All encryption/decryption happens locally on your machine. There is no server component.</li>
+        <li><strong>Isolated subprocesses</strong> - Secrets are decrypted only in isolated subprocesses. Claude sees <code>$env:SECRET_NAME</code>, never the actual value.</li>
+        <li><strong>DPAPI protection</strong> - Master keys are encrypted with Windows DPAPI, bound to your Windows user account and machine.</li>
+        <li><strong>In-memory only</strong> - Commands like <code>scrt view</code> decrypt to memory, never writing plaintext to disk.</li>
+        <li><strong>Fully auditable</strong> - The crypto core is Apache 2.0 open source. The desktop app is source available. Verify yourself.</li>
+      </ul>
+      <p>Even if the developers wanted to see your secrets (which they can't), the architecture makes it impossible since all operations are local and keys never leave your machine.</p>
+
+      <h3>What happens if I lose my Windows account or master key?</h3>
+      <p><strong>You can recover IF you set up backups beforehand.</strong></p>
+      <p><strong>Recovery options:</strong></p>
+      <ol>
+        <li><strong>Master Key Backup</strong> - During setup, a 44-character key is shown once. Save it in your password manager.</li>
+        <li><strong>Recovery Password</strong> - Set a recovery password that encrypts your master key for cloud backup.</li>
+        <li><strong>Disaster Recovery Scripts</strong> - <code>Decrypt-MasterKeyBackup.ps1</code> and <code>Decrypt-EnvFile.ps1</code> work without the app installed.</li>
+      </ol>
+      <div class="callout callout-warning">
+        <div class="callout-title">Without backups</div>
+        <p>Your secrets are <strong>irrecoverable by design</strong>. There is no backdoor. Save your master key!</p>
+      </div>
+
+      <h2 id="troubleshooting">Troubleshooting</h2>
+
+      <h3>"Windows Hello authentication required"</h3>
+      <p>A Windows Hello prompt will appear when accessing secrets. This is expected behavior.</p>
+
+      <h3>".env.encrypted not found"</h3>
+      <p>Run setup in your project first:</p>
+      <pre><code>scrt setup</code></pre>
+
+      <h3>"Secret not found"</h3>
+      <p>Check available secrets:</p>
+      <pre><code>scrt list</code></pre>
+      <p>Then add the missing secret by decrypting, editing, and re-encrypting:</p>
+      <pre><code>scrt decrypt
+# Edit .env file
+scrt encrypt --force</code></pre>
+
+      <h3>Need to update a secret?</h3>
+      <pre><code># Decrypt, edit, re-encrypt
+scrt decrypt
+# Edit .env in your editor
+scrt encrypt --force</code></pre>
+
+    </main>
+  </div>
+
+  <script>
+    // Simple scroll spy for sidebar
+    document.addEventListener('scroll', () => {
+      const sections = document.querySelectorAll('h1[id], h2[id]');
+      const links = document.querySelectorAll('.sidebar-links a');
+
+      let current = '';
+      sections.forEach(section => {
+        const top = section.offsetTop - 100;
+        if (scrollY >= top) {
+          current = section.getAttribute('id');
+        }
+      });
+
+      links.forEach(link => {
+        link.classList.remove('active');
+        if (link.getAttribute('href') === '#' + current) {
+          link.classList.add('active');
+        }
+      });
+    });
+  </script>
+</body>
+</html>
