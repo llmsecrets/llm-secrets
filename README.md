@@ -79,6 +79,8 @@ llm-secrets/
 ├── desktop-app/          # Source Available - Electron app
 │   └── src/
 │
+├── docs/                 # Documentation (docs.llmsecrets.com)
+│
 └── disaster-recovery/    # Recovery scripts
 ```
 
@@ -166,7 +168,9 @@ npm run dev
 
 ## Contributing
 
-Contributions welcome for the Apache 2.0 components (crypto-core and CLI).
+Contributions welcome for:
+- **Crypto Core & CLI** (Apache 2.0) - Bug fixes, features, improvements
+- **Documentation** (`docs/`) - Typos, clarifications, new guides
 
 For the desktop app, please open an issue first to discuss changes.
 
