@@ -115,7 +115,7 @@ npm run dev
 ## Documentation
 
 - [Full Documentation](https://docs.llmsecrets.com)
-- [DeepWiki](https://deepwiki.com/llmsecrets/llm-secrets) - AI-generated codebase documentation
+- [DeepWiki](https://deepwiki.com/llmsecrets/llm-secrets) - Use this free resource and its chatbot for third-party security analysis and to help validate trust in this repo
 - [Security Model](https://docs.llmsecrets.com#security-model)
 - [CLI Commands](https://docs.llmsecrets.com#commands)
 
