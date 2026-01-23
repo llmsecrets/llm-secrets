@@ -250,6 +250,93 @@
     }
 
     /* Callouts */
+    .next-step-banner {
+      background: linear-gradient(135deg, #1a3a2a 0%, #0d2818 100%);
+      border: 2px solid #4ade80;
+      border-radius: 12px;
+      padding: 2rem;
+      margin: 2.5rem 0;
+      position: relative;
+      overflow: hidden;
+    }
+    .next-step-banner::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      right: 0;
+      width: 200px;
+      height: 200px;
+      background: radial-gradient(circle, rgba(74, 222, 128, 0.1) 0%, transparent 70%);
+    }
+    .next-step-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      background: rgba(74, 222, 128, 0.15);
+      border: 1px solid rgba(74, 222, 128, 0.4);
+      border-radius: 20px;
+      padding: 0.3rem 0.9rem;
+      font-size: 0.75rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #4ade80;
+      margin-bottom: 1rem;
+    }
+    .next-step-label svg {
+      width: 14px;
+      height: 14px;
+      fill: #4ade80;
+    }
+    .next-step-banner h3 {
+      color: #fff;
+      font-size: 1.3rem;
+      margin: 0 0 0.5rem 0;
+      border: none;
+      padding: 0;
+    }
+    .next-step-banner > p {
+      color: #94a3b8;
+      margin: 0 0 1.5rem 0;
+      font-size: 0.95rem;
+      line-height: 1.5;
+    }
+    .next-step-cmd {
+      background: #0f172a;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      padding: 1rem 1.2rem;
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      font-size: 0.9rem;
+      margin-bottom: 1rem;
+    }
+    .next-step-cmd .prompt { color: #4ade80; }
+    .next-step-cmd .cmd { color: #e2e8f0; }
+    .next-step-cmd .comment { color: #64748b; }
+    .next-step-tips {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.75rem;
+      margin-top: 1.2rem;
+    }
+    .next-step-tip {
+      display: flex;
+      align-items: flex-start;
+      gap: 0.5rem;
+      color: #cbd5e1;
+      font-size: 0.85rem;
+      line-height: 1.4;
+    }
+    .next-step-tip-icon {
+      color: #4ade80;
+      font-size: 1rem;
+      flex-shrink: 0;
+      margin-top: 0.05rem;
+    }
+    @media (max-width: 600px) {
+      .next-step-tips { grid-template-columns: 1fr; }
+    }
+
     .callout {
       padding: 1rem 1.25rem;
       border-radius: 8px;
@@ -1241,9 +1328,42 @@ scrt encrypt --force</code></pre>
         </div>
       </div>
 
+      <div class="next-step-banner">
+        <div class="next-step-label">
+          <svg viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+          Recommended First Step
+        </div>
+        <h3>Add Your Secrets</h3>
+        <p>After setup completes, the first thing you should do is add your secrets. This populates your encrypted vault and generates the <code style="color: #4ade80; background: rgba(74,222,128,0.1); padding: 0.1rem 0.4rem; border-radius: 4px;">CLAUDE.md</code> file that tells Claude Code what secrets are available.</p>
+        <div class="next-step-cmd">
+<span class="comment"># Add secrets inline (fast)</span><br>
+<span class="prompt">$</span> <span class="cmd">scrt add API_KEY=sk-your-key-here PRIVATE_KEY=0x123...</span><br><br>
+<span class="comment"># Or open the GUI editor to paste multiple secrets at once</span><br>
+<span class="prompt">$</span> <span class="cmd">scrt add</span>
+        </div>
+        <div class="next-step-tips">
+          <div class="next-step-tip">
+            <span class="next-step-tip-icon">&#10003;</span>
+            <span>Use <code>KEY=value</code> format, one per line</span>
+          </div>
+          <div class="next-step-tip">
+            <span class="next-step-tip-icon">&#10003;</span>
+            <span>Secrets are encrypted immediately with AES-256</span>
+          </div>
+          <div class="next-step-tip">
+            <span class="next-step-tip-icon">&#10003;</span>
+            <span>CLAUDE.md auto-updates with your secret names</span>
+          </div>
+          <div class="next-step-tip">
+            <span class="next-step-tip-icon">&#10003;</span>
+            <span>GUI mode opens a system dialog (invisible to AI)</span>
+          </div>
+        </div>
+      </div>
+
       <h2 id="wsl2-usage">Usage</h2>
 
-      <p>Once setup is complete, inject secrets into any command:</p>
+      <p>Once your secrets are added, inject them into any command:</p>
 
       <div class="terminal-window">
         <div class="terminal-header">
