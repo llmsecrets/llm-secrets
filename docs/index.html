@@ -377,6 +377,262 @@
       color: #8b5cf6;
     }
 
+    /* WSL2 Alpha Section */
+    .alpha-banner {
+      position: relative;
+      background: linear-gradient(135deg, #1e1e2e 0%, #2d1b4e 40%, #1a1a2e 100%);
+      border-radius: 16px;
+      padding: 2.5rem 2rem;
+      margin-bottom: 2.5rem;
+      overflow: hidden;
+      border: 1px solid rgba(139, 92, 246, 0.2);
+    }
+
+    .alpha-banner::before {
+      content: '';
+      position: absolute;
+      top: -50%;
+      right: -20%;
+      width: 300px;
+      height: 300px;
+      background: radial-gradient(circle, rgba(139, 92, 246, 0.15) 0%, transparent 70%);
+      border-radius: 50%;
+    }
+
+    .alpha-banner::after {
+      content: '';
+      position: absolute;
+      bottom: -30%;
+      left: -10%;
+      width: 200px;
+      height: 200px;
+      background: radial-gradient(circle, rgba(37, 99, 235, 0.1) 0%, transparent 70%);
+      border-radius: 50%;
+    }
+
+    .alpha-banner-content {
+      position: relative;
+      z-index: 1;
+    }
+
+    .alpha-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      background: rgba(139, 92, 246, 0.2);
+      color: #c4b5fd;
+      padding: 0.3rem 0.75rem;
+      border-radius: 20px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 1rem;
+      border: 1px solid rgba(139, 92, 246, 0.3);
+    }
+
+    .alpha-tag-dot {
+      width: 6px;
+      height: 6px;
+      background: #a78bfa;
+      border-radius: 50%;
+      animation: pulse-dot 2s infinite;
+    }
+
+    @keyframes pulse-dot {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+
+    .alpha-banner h2 {
+      color: #f1f5f9 !important;
+      font-size: 1.75rem !important;
+      margin: 0 0 0.5rem 0 !important;
+      padding: 0 !important;
+      border: none !important;
+    }
+
+    .alpha-banner p {
+      color: #94a3b8 !important;
+      margin: 0;
+      font-size: 1rem;
+    }
+
+    .alpha-platforms {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      margin-top: 1.25rem;
+      flex-wrap: wrap;
+    }
+
+    .alpha-platform-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      padding: 0.4rem 0.85rem;
+      border-radius: 8px;
+      color: #e2e8f0;
+      font-size: 0.85rem;
+      font-weight: 500;
+    }
+
+    .alpha-platform-chip svg {
+      width: 16px;
+      height: 16px;
+      opacity: 0.9;
+    }
+
+    /* Terminal mockup */
+    .terminal-window {
+      background: #0d1117;
+      border-radius: 12px;
+      overflow: hidden;
+      margin-bottom: 1.5rem;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+    }
+
+    .terminal-header {
+      background: #161b22;
+      padding: 0.6rem 1rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
+    .terminal-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+    }
+
+    .terminal-dot-red { background: #ff5f57; }
+    .terminal-dot-yellow { background: #febc2e; }
+    .terminal-dot-green { background: #28c840; }
+
+    .terminal-title {
+      flex: 1;
+      text-align: center;
+      color: #8b949e;
+      font-size: 0.75rem;
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    .terminal-body {
+      padding: 1.25rem 1.5rem;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.85rem;
+      line-height: 1.6;
+      color: #c9d1d9;
+    }
+
+    .terminal-body .prompt {
+      color: #7ee787;
+    }
+
+    .terminal-body .cmd {
+      color: #f0f6fc;
+    }
+
+    .terminal-body .output {
+      color: #8b949e;
+    }
+
+    .terminal-body .success {
+      color: #7ee787;
+    }
+
+    .terminal-body .info {
+      color: #79c0ff;
+    }
+
+    .terminal-body .dim {
+      color: #484f58;
+    }
+
+    /* Steps flow */
+    .setup-steps {
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+      margin-bottom: 2rem;
+    }
+
+    .setup-step {
+      display: flex;
+      gap: 1.25rem;
+      padding: 1.5rem 0;
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .setup-step:last-child {
+      border-bottom: none;
+    }
+
+    .step-number {
+      width: 36px;
+      height: 36px;
+      min-width: 36px;
+      background: linear-gradient(135deg, #2563eb, #7c3aed);
+      color: white;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      font-size: 0.9rem;
+    }
+
+    .step-content h4 {
+      font-size: 1rem;
+      font-weight: 600;
+      margin-bottom: 0.35rem;
+      color: var(--text-primary);
+    }
+
+    .step-content p {
+      font-size: 0.9rem;
+      color: var(--text-secondary);
+      margin: 0;
+    }
+
+    /* Command grid */
+    .cmd-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 0.75rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .cmd-card {
+      background: var(--light-gray);
+      border-radius: 10px;
+      padding: 1rem 1.25rem;
+      border: 1px solid var(--border-color);
+      transition: border-color 0.2s;
+    }
+
+    .cmd-card:hover {
+      border-color: var(--trust-blue);
+    }
+
+    .cmd-card code {
+      display: block;
+      font-size: 0.85rem;
+      font-weight: 500;
+      color: var(--text-primary);
+      margin-bottom: 0.3rem;
+    }
+
+    .cmd-card span {
+      font-size: 0.8rem;
+      color: var(--text-secondary);
+    }
+
     /* Responsive */
     @media (max-width: 1024px) {
       .sidebar {
@@ -449,6 +705,16 @@
           <li><a href="#troubleshooting">Troubleshooting</a></li>
         </ul>
       </div>
+      <div class="sidebar-section">
+        <div class="sidebar-title"><span style="opacity:0.7">&#x1F9EA;</span> WSL2 (Alpha)</div>
+        <ul class="sidebar-links">
+          <li><a href="#wsl2-alpha">Overview</a></li>
+          <li><a href="#wsl2-install">Install</a></li>
+          <li><a href="#wsl2-setup">Setup</a></li>
+          <li><a href="#wsl2-usage">Usage</a></li>
+          <li><a href="#wsl2-commands">Commands</a></li>
+        </ul>
+      </div>
     </aside>
 
     <main class="docs-content">
@@ -458,7 +724,7 @@
         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M0 3.449L9.75 2.1v9.451H0m10.949-9.602L24 0v11.4H10.949M0 12.6h9.75v9.451L0 20.699M10.949 12.6H24V24l-12.9-1.801"/></svg>
         <div class="windows-notice-content">
           <div class="windows-notice-title">Windows 10/11 Only</div>
-          <div class="windows-notice-text">LLM Secrets requires Windows 10 or 11 with Windows Hello enabled. WSL is fully supported. macOS/Linux coming soon.</div>
+          <div class="windows-notice-text">LLM Secrets requires Windows 10 or 11 with Windows Hello enabled. <a href="#wsl2-alpha" style="color: white; text-decoration: underline;">Native WSL2 support now in alpha.</a></div>
         </div>
       </div>
 
@@ -841,6 +1107,232 @@ scrt encrypt --force</code></pre>
 scrt decrypt
 # Edit .env in your editor
 scrt encrypt --force</code></pre>
+
+      <!-- WSL2 Alpha Section -->
+      <div id="wsl2-alpha" style="margin-top: 4rem;"></div>
+      <div class="alpha-banner">
+        <div class="alpha-banner-content">
+          <div class="alpha-tag"><span class="alpha-tag-dot"></span> Alpha</div>
+          <h2>Native WSL2 Support</h2>
+          <p>LLM Secrets runs natively in Windows Subsystem for Linux. Same protection, native bash.</p>
+          <div class="alpha-platforms">
+            <div class="alpha-platform-chip">
+              <svg viewBox="0 0 24 24" fill="currentColor"><path d="M0 3.449L9.75 2.1v9.451H0m10.949-9.602L24 0v11.4H10.949M0 12.6h9.75v9.451L0 20.699M10.949 12.6H24V24l-12.9-1.801"/></svg>
+              Windows Hello
+            </div>
+            <div class="alpha-platform-chip">
+              <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12.504 0c-.155 0-.311.003-.465.01C7.29.147 3.689 3.503 3.054 7.862c-.072.486-.122.98-.149 1.482-.016.281-.02.564-.02.849 0 .281.003.553.017.822.085 3.245 1.435 5.848 3.394 7.827.596.603 1.238 1.148 1.914 1.629.676.481 1.387.897 2.123 1.242.292.137.585.263.882.378.148.058.297.112.448.163l.022.007c.295.1.596.189.9.268.152.04.305.075.459.107.153.032.308.061.464.085.155.024.313.044.472.06.16.016.321.029.484.038l.246.012c.082.003.164.005.247.005s.165-.002.247-.005l.246-.012c.163-.009.324-.022.484-.038.16-.016.317-.036.472-.06.156-.024.311-.053.464-.085.154-.032.307-.067.459-.107.304-.079.605-.168.9-.268l.022-.007c.151-.051.3-.105.448-.163.297-.115.59-.241.882-.378.736-.345 1.447-.761 2.123-1.242.676-.481 1.318-1.026 1.914-1.629 1.959-1.979 3.309-4.582 3.394-7.827.014-.269.017-.541.017-.822 0-.285-.004-.568-.02-.849-.027-.502-.077-.996-.149-1.482C20.311 3.503 16.71.147 11.961.01 11.806.003 11.649 0 11.496 0h1.008zM12 2.2c3.568.048 6.522 2.212 7.584 5.337.167.494.297 1.007.387 1.535.061.359.103.724.123 1.097.01.183.014.368.014.555 0 .183-.004.358-.013.532-.068 2.549-1.152 4.604-2.725 6.193-.479.484-.997.925-1.545 1.316-.549.39-1.126.73-1.726 1.011-.24.112-.481.214-.726.306l-.183.065c-.244.082-.492.155-.744.219-.125.032-.251.062-.378.088-.127.026-.255.05-.384.07-.128.02-.258.037-.389.05-.131.013-.264.023-.399.031l-.202.01c-.068.002-.135.004-.203.004-.068 0-.135-.002-.203-.004l-.202-.01c-.135-.008-.268-.018-.399-.031-.131-.013-.261-.03-.389-.05-.129-.02-.257-.044-.384-.07-.127-.026-.253-.056-.378-.088-.252-.064-.5-.137-.744-.219l-.183-.065c-.245-.092-.486-.194-.726-.306-.6-.281-1.177-.621-1.726-1.011-.548-.391-1.066-.832-1.545-1.316-1.573-1.589-2.657-3.644-2.725-6.193-.009-.174-.013-.349-.013-.532 0-.187.004-.372.014-.555.02-.373.062-.738.123-1.097.09-.528.22-1.041.387-1.535C5.478 4.412 8.432 2.248 12 2.2z"/></svg>
+              Ubuntu / Debian
+            </div>
+            <div class="alpha-platform-chip">
+              <svg viewBox="0 0 24 24" fill="currentColor"><path d="M13.2 2.006c.274.007.548.03.82.07a6.89 6.89 0 013.82 1.97 6.79 6.79 0 011.39 2.03c.36.78.56 1.63.59 2.49.03.67-.06 1.34-.23 1.98-.24.87-.66 1.68-1.24 2.37-.36.43-.78.81-1.24 1.12a.39.39 0 01-.04.02l-.02.01c-.55.34-1.15.59-1.78.73-.48.11-.98.14-1.47.1-.41-.04-.81-.12-1.2-.26a4.6 4.6 0 01-.67-.3l-.1-.06a.49.49 0 00-.06-.03 1.04 1.04 0 00-.45-.1c-.15 0-.31.04-.45.1l-.06.03-.1.06c-.21.12-.43.22-.67.3-.39.14-.79.22-1.2.26-.49.04-.99.01-1.47-.1a5.33 5.33 0 01-1.78-.73l-.02-.01a.39.39 0 01-.04-.02c-.46-.31-.88-.69-1.24-1.12-.58-.69-1-1.5-1.24-2.37a6.23 6.23 0 01-.23-1.98c.03-.86.23-1.71.59-2.49a6.79 6.79 0 011.39-2.03 6.89 6.89 0 013.82-1.97c.272-.04.546-.063.82-.07m-.2 1.002a5.9 5.9 0 00-3.95 1.69 5.83 5.83 0 00-1.68 3.76 5.28 5.28 0 00.2 1.68c.2.72.55 1.39 1.02 1.96.3.36.65.68 1.04.95.46.29.97.5 1.5.61.39.09.8.11 1.2.08.34-.03.67-.1.99-.22.21-.07.42-.17.61-.28.33-.18.72-.28 1.12-.28.4 0 .79.1 1.12.28.19.11.4.21.61.28.32.12.65.19.99.22.4.03.81.01 1.2-.08a4.4 4.4 0 001.5-.61c.39-.27.74-.59 1.04-.95.47-.57.82-1.24 1.02-1.96.14-.54.21-1.1.2-1.68a5.83 5.83 0 00-1.68-3.76A5.9 5.9 0 0013 3.008z"/><path d="M12 7c.55 0 1 .45 1 1v3.59l2.12 2.12a1 1 0 01-1.42 1.42l-2.41-2.42A1 1 0 0111 12V8c0-.55.45-1 1-1z"/></svg>
+              Bash Native
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <h2 id="wsl2-install" style="border-top: none; padding-top: 0; margin-top: 1.5rem;">Install</h2>
+
+      <p>One command to get started. Run this inside your WSL2 terminal:</p>
+
+      <div class="terminal-window">
+        <div class="terminal-header">
+          <span class="terminal-dot terminal-dot-red"></span>
+          <span class="terminal-dot terminal-dot-yellow"></span>
+          <span class="terminal-dot terminal-dot-green"></span>
+          <span class="terminal-title">Ubuntu (WSL2)</span>
+        </div>
+        <div class="terminal-body">
+<span class="prompt">$</span> <span class="cmd">git clone https://github.com/llmsecrets/llm-secrets.git</span>
+<span class="prompt">$</span> <span class="cmd">cd llm-secrets/scrt-linux</span>
+<span class="prompt">$</span> <span class="cmd">./install.sh</span>
+<span class="output">==============================</span>
+<span class="output">  Scrt Linux - Dependencies</span>
+<span class="output">==============================</span>
+<span class="output"></span>
+<span class="success">[+] GnuPG: installed</span>
+<span class="success">[+] pass (password-store): installed</span>
+<span class="success">[+] jq (JSON processor): installed</span>
+<span class="success">[+] OpenSSL (AES encryption): installed</span>
+<span class="success">[+] keyctl (kernel keyring): installed</span>
+<span class="success">[+] Zenity (GTK dialogs via WSLg): installed</span>
+<span class="success">[+] gpg-agent: installed</span>
+<span class="success">[+] PowerShell interop: available (Windows Hello bridge)</span>
+<span class="output"></span>
+<span class="success">[+] All dependencies satisfied!</span>
+        </div>
+      </div>
+
+      <p>The installer checks and installs everything you need. If packages are missing, it offers to install them automatically.</p>
+
+      <h2 id="wsl2-setup">Setup</h2>
+
+      <p>The setup wizard walks you through everything interactively:</p>
+
+      <div class="terminal-window">
+        <div class="terminal-header">
+          <span class="terminal-dot terminal-dot-red"></span>
+          <span class="terminal-dot terminal-dot-yellow"></span>
+          <span class="terminal-dot terminal-dot-green"></span>
+          <span class="terminal-title">Ubuntu (WSL2)</span>
+        </div>
+        <div class="terminal-body">
+<span class="prompt">$</span> <span class="cmd">scrt setup</span>
+<span class="output">======================================</span>
+<span class="output">        Scrt Linux - Setup</span>
+<span class="output">======================================</span>
+<span class="output"></span>
+<span class="output">This will set up encrypted secret management</span>
+<span class="output">with Windows Hello authentication (via WSL2).</span>
+<span class="output"></span>
+<span class="output">What we'll do:</span>
+<span class="output">  1. Check dependencies</span>
+<span class="output">  2. Verify Windows Hello</span>
+<span class="output">  3. Generate encryption key</span>
+<span class="output">  4. Save backup key</span>
+<span class="output">  5. Add your first secrets</span>
+<span class="output">  6. Install Claude Code commands</span>
+        </div>
+      </div>
+
+      <div class="setup-steps">
+        <div class="setup-step">
+          <div class="step-number">1</div>
+          <div class="step-content">
+            <h4>Dependencies verified</h4>
+            <p>Checks that GPG, pass, openssl, keyctl, and PowerShell interop are available.</p>
+          </div>
+        </div>
+        <div class="setup-step">
+          <div class="step-number">2</div>
+          <div class="step-content">
+            <h4>Windows Hello confirmation</h4>
+            <p>Your existing Windows Hello enrollment (face, fingerprint, or PIN) is used directly from WSL2.</p>
+          </div>
+        </div>
+        <div class="setup-step">
+          <div class="step-number">3</div>
+          <div class="step-content">
+            <h4>Encryption key generated</h4>
+            <p>A master key is created and stored securely. You'll set a passphrase.</p>
+          </div>
+        </div>
+        <div class="setup-step">
+          <div class="step-number">4</div>
+          <div class="step-content">
+            <h4>Backup key saved</h4>
+            <p>A recovery key is exported. Save it somewhere safe &mdash; it's your only recovery option.</p>
+          </div>
+        </div>
+        <div class="setup-step">
+          <div class="step-number">5</div>
+          <div class="step-content">
+            <h4>Secrets added</h4>
+            <p>Paste your secrets in <code>KEY=value</code> format. They're encrypted immediately.</p>
+          </div>
+        </div>
+        <div class="setup-step">
+          <div class="step-number">6</div>
+          <div class="step-content">
+            <h4>Claude Code integrated</h4>
+            <p><code>CLAUDE.md</code> is generated and slash commands are installed automatically.</p>
+          </div>
+        </div>
+      </div>
+
+      <h2 id="wsl2-usage">Usage</h2>
+
+      <p>Once setup is complete, inject secrets into any command:</p>
+
+      <div class="terminal-window">
+        <div class="terminal-header">
+          <span class="terminal-dot terminal-dot-red"></span>
+          <span class="terminal-dot terminal-dot-yellow"></span>
+          <span class="terminal-dot terminal-dot-green"></span>
+          <span class="terminal-title">Ubuntu (WSL2)</span>
+        </div>
+        <div class="terminal-body">
+<span class="dim"># Deploy a contract with your private key</span>
+<span class="prompt">$</span> <span class="cmd">scrt run forge script Deploy.s.sol --private-key $PRIVATE_KEY --broadcast</span>
+<span class="success">[+] Injecting 12 secrets into subprocess...</span>
+<span class="output"></span>
+<span class="dim"># Push to GitHub with your PAT</span>
+<span class="prompt">$</span> <span class="cmd">scrt run git push https://$GITHUB_PAT@github.com/user/repo.git</span>
+<span class="success">[+] Injecting 12 secrets into subprocess...</span>
+<span class="output"></span>
+<span class="dim"># Only inject specific secrets</span>
+<span class="prompt">$</span> <span class="cmd">scrt run --only PRIVATE_KEY,ALCHEMY_RPC_URL forge script Deploy.s.sol</span>
+<span class="success">[+] Injecting 2 selected secrets...</span>
+<span class="output"></span>
+<span class="dim"># See what would be injected (no execution)</span>
+<span class="prompt">$</span> <span class="cmd">scrt run --dry-run forge test</span>
+<span class="output">Secrets that would be injected:</span>
+<span class="output">  PRIVATE_KEY=--------</span>
+<span class="output">  ALCHEMY_RPC_URL=--------</span>
+<span class="output">  ETHERSCAN_API_KEY=--------</span>
+        </div>
+      </div>
+
+      <p>Claude Code writes commands using <code>$SECRET_NAME</code> syntax. The actual values are injected at runtime and never appear in the terminal output or Claude's context.</p>
+
+      <h2 id="wsl2-commands">Commands</h2>
+
+      <div class="cmd-grid">
+        <div class="cmd-card">
+          <code>scrt setup</code>
+          <span>First-time setup wizard</span>
+        </div>
+        <div class="cmd-card">
+          <code>scrt run &lt;cmd&gt;</code>
+          <span>Run with secrets injected</span>
+        </div>
+        <div class="cmd-card">
+          <code>scrt view</code>
+          <span>View secrets (GUI window)</span>
+        </div>
+        <div class="cmd-card">
+          <code>scrt add KEY=val</code>
+          <span>Add new secrets</span>
+        </div>
+        <div class="cmd-card">
+          <code>scrt edit</code>
+          <span>Edit secrets interactively</span>
+        </div>
+        <div class="cmd-card">
+          <code>scrt list</code>
+          <span>List secret names</span>
+        </div>
+        <div class="cmd-card">
+          <code>scrt hide</code>
+          <span>Verify security status</span>
+        </div>
+        <div class="cmd-card">
+          <code>scrt learn</code>
+          <span>Regenerate CLAUDE.md</span>
+        </div>
+        <div class="cmd-card">
+          <code>scrt backup</code>
+          <span>Export / import</span>
+        </div>
+        <div class="cmd-card">
+          <code>scrt status</code>
+          <span>Show session info</span>
+        </div>
+        <div class="cmd-card">
+          <code>scrt logout</code>
+          <span>Lock secrets</span>
+        </div>
+        <div class="cmd-card">
+          <code>scrt version</code>
+          <span>Show version</span>
+        </div>
+      </div>
+
+      <div class="callout callout-info">
+        <div class="callout-title">Requirements</div>
+        <p>Windows 10/11 with WSL2 (Ubuntu or Debian). Windows Hello must be configured. WSLg recommended for GUI features.</p>
+      </div>
 
     </main>
   </div>
