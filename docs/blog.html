@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Blog - LLM Secrets</title>
+  <meta name="description" content="Articles about protecting secrets from AI coding assistants, security best practices, and LLM Secrets updates.">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔐</text></svg>">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --trust-blue: #2563eb;
+      --trust-blue-hover: #1d4ed8;
+      --trust-blue-light: rgba(37, 99, 235, 0.1);
+      --success-green: #16a34a;
+      --success-green-light: rgba(22, 163, 74, 0.1);
+      --warning-amber: #f59e0b;
+      --danger-red: #dc2626;
+      --dark-gray: #0f172a;
+      --medium-gray: #64748b;
+      --light-gray: #f1f5f9;
+      --background: #ffffff;
+      --card-background: #ffffff;
+      --text-primary: #0f172a;
+      --text-secondary: #64748b;
+      --border-color: rgba(0, 0, 0, 0.1);
+      --shadow: rgba(0, 0, 0, 0.1);
+      --code-bg: #1e293b;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+      background: var(--background);
+      color: var(--text-primary);
+      line-height: 1.7;
+    }
+
+    /* Navigation */
+    nav {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      background: rgba(255, 255, 255, 0.95);
+      backdrop-filter: blur(10px);
+      border-bottom: 1px solid var(--border-color);
+      z-index: 1000;
+      padding: 1rem 0;
+    }
+
+    .nav-content {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 0 2rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      font-size: 1.5rem;
+      font-weight: 700;
+      color: var(--dark-gray);
+      text-decoration: none;
+    }
+
+    .logo-icon {
+      width: 40px;
+      height: 40px;
+      background: var(--dark-gray);
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.25rem;
+    }
+
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 2rem;
+    }
+
+    .nav-links a {
+      color: var(--text-secondary);
+      text-decoration: none;
+      font-weight: 500;
+      font-size: 0.95rem;
+      transition: color 0.2s;
+    }
+
+    .nav-links a:hover, .nav-links a.active {
+      color: var(--dark-gray);
+    }
+
+    /* Blog Layout */
+    .blog-container {
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 120px 2rem 4rem;
+    }
+
+    .blog-header {
+      text-align: center;
+      margin-bottom: 3rem;
+    }
+
+    .blog-header h1 {
+      font-size: 2.5rem;
+      font-weight: 700;
+      margin-bottom: 0.5rem;
+      color: var(--dark-gray);
+    }
+
+    .blog-header p {
+      color: var(--text-secondary);
+      font-size: 1.1rem;
+    }
+
+    /* Blog Post Card */
+    .blog-posts {
+      display: flex;
+      flex-direction: column;
+      gap: 2rem;
+    }
+
+    .blog-card {
+      background: var(--card-background);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      padding: 2rem;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+
+    .blog-card:hover {
+      border-color: var(--trust-blue);
+      box-shadow: 0 4px 20px var(--shadow);
+    }
+
+    .blog-card-meta {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      margin-bottom: 1rem;
+    }
+
+    .blog-card-date {
+      font-size: 0.85rem;
+      color: var(--text-secondary);
+    }
+
+    .blog-card-tag {
+      display: inline-block;
+      padding: 0.25rem 0.75rem;
+      font-size: 0.75rem;
+      font-weight: 500;
+      border-radius: 20px;
+      text-transform: uppercase;
+      background: var(--trust-blue-light);
+      color: var(--trust-blue);
+    }
+
+    .blog-card h2 {
+      font-size: 1.5rem;
+      font-weight: 600;
+      margin-bottom: 0.75rem;
+      color: var(--dark-gray);
+    }
+
+    .blog-card h2 a {
+      color: inherit;
+      text-decoration: none;
+    }
+
+    .blog-card h2 a:hover {
+      color: var(--trust-blue);
+    }
+
+    .blog-card p {
+      color: var(--text-secondary);
+      margin-bottom: 1rem;
+      line-height: 1.6;
+    }
+
+    .blog-card-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      color: var(--trust-blue);
+      font-weight: 500;
+      text-decoration: none;
+      font-size: 0.95rem;
+    }
+
+    .blog-card-link:hover {
+      text-decoration: underline;
+    }
+
+    .blog-card-link svg {
+      width: 16px;
+      height: 16px;
+      transition: transform 0.2s;
+    }
+
+    .blog-card-link:hover svg {
+      transform: translateX(3px);
+    }
+
+    /* Footer */
+    .blog-footer {
+      margin-top: 4rem;
+      padding-top: 2rem;
+      border-top: 1px solid var(--border-color);
+      text-align: center;
+      color: var(--text-secondary);
+      font-size: 0.9rem;
+    }
+
+    .blog-footer a {
+      color: var(--trust-blue);
+      text-decoration: none;
+    }
+
+    .blog-footer a:hover {
+      text-decoration: underline;
+    }
+
+    /* Responsive */
+    @media (max-width: 640px) {
+      .blog-header h1 {
+        font-size: 2rem;
+      }
+      .nav-links {
+        display: none;
+      }
+      .blog-container {
+        padding: 100px 1.5rem 3rem;
+      }
+    }
+  </style>
+</head>
+<body>
+  <nav>
+    <div class="nav-content">
+      <a href="https://llmsecrets.com" class="logo">
+        <span class="logo-icon">🔐</span>
+        LLM Secrets
+      </a>
+      <div class="nav-links">
+        <a href="https://llmsecrets.com">Home</a>
+        <a href="index.html">Docs</a>
+        <a href="blog.html" class="active">Blog</a>
+        <a href="https://github.com/llmsecrets/llm-secrets" target="_blank">GitHub</a>
+      </div>
+    </div>
+  </nav>
+
+  <main class="blog-container">
+    <header class="blog-header">
+      <h1>Blog</h1>
+      <p>Security insights, comparisons, and updates from the LLM Secrets team</p>
+    </header>
+
+    <div class="blog-posts">
+      <article class="blog-card">
+        <div class="blog-card-meta">
+          <span class="blog-card-date">February 2, 2026</span>
+          <span class="blog-card-tag">Comparison</span>
+        </div>
+        <h2><a href="blog/llm-secrets-vs-1password-cli.html">LLM Secrets vs 1Password CLI: Which Should You Choose?</a></h2>
+        <p>A detailed comparison of LLM Secrets and 1Password CLI for managing secrets in development environments. Learn which tool best fits your workflow, especially when working with AI coding assistants like Claude Code.</p>
+        <a href="blog/llm-secrets-vs-1password-cli.html" class="blog-card-link">
+          Read more
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M5 12h14M12 5l7 7-7 7"/>
+          </svg>
+        </a>
+      </article>
+    </div>
+
+    <footer class="blog-footer">
+      <p>&copy; 2026 LLM Secrets. <a href="index.html">Documentation</a> &middot; <a href="https://github.com/llmsecrets/llm-secrets">GitHub</a></p>
+    </footer>
+  </main>
+</body>
+</html>
