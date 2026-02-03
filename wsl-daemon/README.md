@@ -68,3 +68,17 @@ Or use `scrt gui` and select:
 - Automatic session expiry (configurable TTL)
 - Output sanitization prevents secret leakage
 - Unix socket restricted to current user
+
+---
+
+## Security Notice
+
+This package has been scanned for secrets before distribution.
+Source code is included in `src/` for transparency and auditability.
+
+To verify the build:
+```bash
+cd src && cargo build --release
+```
+
+SHA256 checksums are published alongside the download.
