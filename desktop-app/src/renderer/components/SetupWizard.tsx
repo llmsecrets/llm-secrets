@@ -726,20 +726,20 @@ GITHUB_PAT=
       <div className="how-it-works">
         <h3>How secrets work with Claude Code:</h3>
         <ul>
-          <li>You write commands using <code>$env:SECRET_NAME</code></li>
-          <li>LLM Secrets injects the actual values at runtime</li>
+          <li>You wrap commands with <code>scrt run</code></li>
+          <li>Secrets are injected as environment variables at runtime</li>
           <li>Claude Code never sees the values</li>
         </ul>
 
         <div className="example-box">
           <p><strong>Example:</strong></p>
-          <code>forge script Deploy.s.sol --private-key $env:PRIVATE_KEY</code>
+          <code>scrt run forge script Deploy.s.sol --private-key $PRIVATE_KEY</code>
           <p className="example-note">PRIVATE_KEY is injected, value stays hidden</p>
         </div>
 
         <h3>Available Claude Code commands:</h3>
         <ul>
-          <li><code>/view</code> - Decrypt and view your secrets (triggers Windows Hello)</li>
+          <li><code>/view</code> - Decrypt and view your secrets (triggers Touch ID)</li>
           <li><code>/learn</code> - Generate CLAUDE.md so Claude knows your secrets</li>
           <li><code>/hide</code> - Verify secrets are properly hidden</li>
         </ul>

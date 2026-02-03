@@ -28,14 +28,9 @@ export class CryptoService {
       console.log('[CryptoService] Running in TEST MODE - using sandbox');
       console.log(`[CryptoService] Sandbox: ${this.TEST_SANDBOX_PATH}`);
     } else {
-<<<<<<< Updated upstream
       // Use portable userData path - works on any machine
       // EnvCrypto.psm1 and PoShKeePass are copied here at app startup from bundled resources
       this.KEEP_SCRT_PATH = app.getPath('userData');
-=======
-      // Use production paths - must match index.ts paths (Keep Scrt\Scrt\env-crypto-test)
-      this.KEEP_SCRT_PATH = path.join('C:', 'Users', 'jgott', 'OneDrive', 'Desktop', 'Keep Scrt', 'Scrt');
->>>>>>> Stashed changes
       this.TEST_SANDBOX_PATH = '';
       this.envCryptoModulePath = path.join(this.KEEP_SCRT_PATH, 'EnvCrypto.psm1');
       console.log(`[CryptoService] Using userData path: ${this.KEEP_SCRT_PATH}`);

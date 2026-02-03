@@ -5,8 +5,10 @@ import * as path from 'path';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { app } from 'electron';
+import { platform } from 'os';
 
 const execAsync = promisify(exec);
+const IS_MAC = platform() === 'darwin';
 
 export interface WalletData {
   address: string;
@@ -70,6 +72,10 @@ export class WalletService {
     registry.nextId = walletId + 1;
 
     // Write updated registry
+    const registryDir = path.dirname(this.WALLET_REGISTRY_PATH);
+    if (!fs.existsSync(registryDir)) {
+      fs.mkdirSync(registryDir, { recursive: true });
+    }
     fs.writeFileSync(this.WALLET_REGISTRY_PATH, JSON.stringify(registry, null, 2), 'utf-8');
 
     const walletData: WalletData = {
@@ -77,27 +83,30 @@ export class WalletService {
       network,
       createdAt,
       walletId: walletId.toString(),
-      storageLocation: `Windows Credential Manager (psst: WALLET_${walletId}_PRIVATE_KEY)`,
+      storageLocation: `${IS_MAC ? 'macOS Keychain' : 'Windows Credential Manager'} (WALLET_${walletId}_PRIVATE_KEY)`,
     };
 
     return walletData;
   }
 
   /**
-   * Store a secret using psst (Windows Credential Manager)
+   * Store a secret in the system credential store
    */
   private async storeToPsst(key: string, value: string): Promise<void> {
     try {
-      // Use psst to set the secret
-      // echo "value" | psst --global set key
-      const command = `powershell.exe -Command "echo '${value}' | & '${this.PSST_PATH}' --global set ${key}"`;
-      const { stderr } = await execAsync(command, { windowsHide: true });
-
-      if (stderr && stderr.trim() && !stderr.includes('successfully')) {
-        throw new Error(`psst error: ${stderr}`);
+      if (IS_MAC) {
+        // macOS: use keytar (Keychain)
+        await keytar.setPassword('scrt-wallet', key, value);
+      } else {
+        // Windows: use psst (Credential Manager)
+        const command = `powershell.exe -Command "echo '${value}' | & '${this.PSST_PATH}' --global set ${key}"`;
+        const { stderr } = await execAsync(command, { windowsHide: true });
+        if (stderr && stderr.trim() && !stderr.includes('successfully')) {
+          throw new Error(`psst error: ${stderr}`);
+        }
       }
     } catch (error) {
-      throw new Error(`Failed to store secret with psst: ${(error as Error).message}`);
+      throw new Error(`Failed to store wallet key: ${(error as Error).message}`);
     }
   }
 
@@ -161,7 +170,7 @@ export class WalletService {
           network: walletInfo.network,
           createdAt: walletInfo.created,
           walletId: id,
-          storageLocation: `Windows Credential Manager (psst: WALLET_${id}_PRIVATE_KEY)`,
+          storageLocation: `${IS_MAC ? 'macOS Keychain' : 'Windows Credential Manager'} (WALLET_${id}_PRIVATE_KEY)`,
         });
       }
 

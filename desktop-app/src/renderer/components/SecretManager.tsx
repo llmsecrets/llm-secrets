@@ -4,7 +4,9 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 type DecryptMethod = 'windowsHello' | 'manualKey';
 type ViewState = 'encrypted' | 'decrypted' | 'justSaved';
 type AuthStep = 'selectMethod' | 'enterKeepassPassword' | 'authenticating';
-type SecurityMode = 'simple' | 'advanced';
+
+// This version is Simple mode only - no need to check settings
+const SECURITY_MODE = 'simple' as const;
 
 interface SecretManagerProps {
   onEditingChange?: (isEditing: boolean) => void;
@@ -22,7 +24,7 @@ const parseSecretNames = (content: string): string[] => {
 // Generate CLAUDE.md preview content (simplified version for preview)
 const generateClaudeMdPreview = (secretNames: string[]): string => {
   const secretsTable = secretNames.length > 0
-    ? secretNames.map(name => `| ${name} | User-defined | \`$env:${name}\` |`).join('\n')
+    ? secretNames.map(name => `| ${name} | User-defined | \`process.env.${name}\` |`).join('\n')
     : '| (No secrets added yet) | - | - |';
 
   return `# LLM Secrets - Secret Access Reference
@@ -35,14 +37,22 @@ ${secretsTable}
 
 ## How to Run Commands with Secrets
 
-Write commands using \`$env:SECRET_NAME\` syntax.
-LLM Secrets injects the actual values at runtime.
+Wrap your command with \`scrt run\`. Secrets are injected as standard
+environment variables. Programs read them via \`process.env.KEY\` (Node),
+\`os.environ['KEY']\` (Python), \`std::env::var("KEY")\` (Rust), etc.
 
 ### Examples
 
-\`\`\`powershell
-forge script script/Deploy.s.sol --private-key $env:PRIVATE_KEY
-curl -H "Authorization: Bearer $env:API_KEY" https://api.example.com
+\`\`\`bash
+scrt run node deploy.js
+# deploy.js uses: const key = process.env.PRIVATE_KEY
+
+scrt run python3 script.py
+# script.py uses: key = os.environ['API_KEY']
+
+scrt run env | grep PRIVATE_KEY   # verify injection
+
+scrt run --only API_KEY,DB_URL node server.js   # selective injection
 \`\`\`
 
 ---
@@ -61,7 +71,6 @@ export const SecretManager: React.FC<SecretManagerProps> = ({ onEditingChange })
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [lastSaveTime, setLastSaveTime] = useState<string>('');
-  const [securityMode, setSecurityMode] = useState<SecurityMode>('simple');
   const [claudeMdPath, setClaudeMdPath] = useState<string | null>(null);
 
   // Drag-drop state
@@ -77,28 +86,12 @@ export const SecretManager: React.FC<SecretManagerProps> = ({ onEditingChange })
   // Memoized CLAUDE.md preview
   const claudeMdPreview = useMemo(() => generateClaudeMdPreview(secretNames), [secretNames]);
 
-  // Load security mode on mount
-  useEffect(() => {
-    loadSecurityMode();
-  }, []);
-
   // Notify parent when editing state changes
   useEffect(() => {
     if (onEditingChange) {
       onEditingChange(viewState === 'decrypted');
     }
   }, [viewState, onEditingChange]);
-
-  const loadSecurityMode = async () => {
-    try {
-      const result = await window.electronAPI.getSimpleSecretSettings();
-      if (result.success && result.data) {
-        setSecurityMode(result.data.securityMode || 'simple');
-      }
-    } catch (err) {
-      console.error('Failed to load security mode:', err);
-    }
-  };
 
   // Drag-drop handlers
   const handleDragOver = useCallback((e: React.DragEvent) => {
@@ -171,21 +164,50 @@ export const SecretManager: React.FC<SecretManagerProps> = ({ onEditingChange })
     }
   }, []);
 
-  const handleDecrypt = () => {
-    setShowDecryptDialog(true);
+  const handleDecrypt = async () => {
     setDecryptMethod('windowsHello');
-    setAuthStep('selectMethod');
     setKeepassPassword('');
     setError('');
+
+    // Simple mode: Skip method selection, go directly to Windows Hello
+    if (SECURITY_MODE === 'simple') {
+      setShowDecryptDialog(true);
+      setAuthStep('authenticating');
+      setLoading(true);
+
+      try {
+        const authResult = await window.electronAPI.authenticateSimple();
+        if (!authResult.success) {
+          setError(authResult.error || 'Windows Hello authentication failed');
+          setShowDecryptDialog(false);
+          setLoading(false);
+          return;
+        }
+
+        // Authentication succeeded, perform decrypt
+        const result = await window.electronAPI.decryptEnv('');
+        if (result.success && result.data) {
+          setContent(result.data);
+          setViewState('decrypted');
+          setShowDecryptDialog(false);
+        } else {
+          setError(result.error || 'Decryption failed');
+        }
+      } catch (err) {
+        setError(`Error: ${(err as Error).message}`);
+      } finally {
+        setLoading(false);
+        setShowDecryptDialog(false);
+      }
+      return;
+    }
+
+    // Advanced mode: Show method selection dialog
+    setShowDecryptDialog(true);
+    setAuthStep('selectMethod');
   };
 
   const performDecrypt = async () => {
-    await window.electronAPI.debugLog('SecretManager', 'performDecrypt START', {
-      decryptMethod,
-      securityMode,
-      masterKeyLength: masterKey?.length || 0
-    });
-
     // If using manual key, validate it
     if (decryptMethod === 'manualKey' && (!masterKey || masterKey.length !== 44)) {
       setError('Master key must be exactly 44 characters');
@@ -195,38 +217,22 @@ export const SecretManager: React.FC<SecretManagerProps> = ({ onEditingChange })
     setLoading(true);
     setError('');
 
-    let retrievedMasterKey = '';
-
     try {
       if (decryptMethod === 'windowsHello') {
-        if (securityMode === 'simple') {
-          // Simple mode: Windows Hello only - returns master key
-          await window.electronAPI.debugLog('SecretManager', 'Simple mode - calling authenticateSimple...');
+        if (SECURITY_MODE === 'simple') {
+          // Simple mode: Windows Hello only
           setAuthStep('authenticating');
           const authResult = await window.electronAPI.authenticateSimple();
-
-          await window.electronAPI.debugLog('SecretManager', 'authenticateSimple returned', {
-            success: authResult.success,
-            hasMasterKey: !!authResult.masterKey,
-            masterKeyLength: authResult.masterKey?.length || 0,
-            error: authResult.error || null
-          });
-
           if (!authResult.success) {
             setError(authResult.error || 'Windows Hello authentication failed');
             setAuthStep('selectMethod');
             setLoading(false);
             return;
           }
-          // Get master key from authentication result
-          retrievedMasterKey = authResult.masterKey || '';
-          await window.electronAPI.debugLog('SecretManager', 'Retrieved master key from authResult', {
-            retrievedKeyLength: retrievedMasterKey.length,
-            retrievedKeyPreview: retrievedMasterKey ? retrievedMasterKey.substring(0, 10) + '...' : 'EMPTY'
-          });
+          // Get master key from DPAPI after authentication
+          // For now, we need to retrieve it - the decrypt will handle this
         } else {
           // Advanced mode: Check for active session
-          await window.electronAPI.debugLog('SecretManager', 'Advanced mode - checking session...');
           const sessionCheck = await window.electronAPI.checkSession();
           if (!sessionCheck.hasSession) {
             setAuthStep('enterKeepassPassword');
@@ -236,24 +242,10 @@ export const SecretManager: React.FC<SecretManagerProps> = ({ onEditingChange })
         }
       }
 
-      // For Simple mode: use retrieved master key from DPAPI
-      // For Advanced mode with session: pass empty string (backend retrieves from KeePass)
-      // For manual key: use the manually entered key
-      const keyToUse = decryptMethod === 'manualKey' ? masterKey : retrievedMasterKey;
-
-      await window.electronAPI.debugLog('SecretManager', 'Calling decryptEnv', {
-        keyToUseLength: keyToUse?.length || 0,
-        keyToUseProvided: !!keyToUse && keyToUse.trim() !== '',
-        keyToUsePreview: keyToUse ? keyToUse.substring(0, 10) + '...' : 'EMPTY'
-      });
-
+      // Pass empty string for Windows Hello methods (backend will retrieve master key)
+      // Pass master key for manual method
+      const keyToUse = decryptMethod === 'manualKey' ? masterKey : '';
       const result = await window.electronAPI.decryptEnv(keyToUse);
-
-      await window.electronAPI.debugLog('SecretManager', 'decryptEnv returned', {
-        success: result.success,
-        dataLength: result.data?.length || 0,
-        error: result.error || null
-      });
 
       if (result.success && result.data) {
         setContent(result.data);
@@ -262,16 +254,12 @@ export const SecretManager: React.FC<SecretManagerProps> = ({ onEditingChange })
         setMasterKey('');
         setKeepassPassword('');
         setAuthStep('selectMethod');
-        await window.electronAPI.debugLog('SecretManager', 'Decryption SUCCESS');
       } else {
         setError(result.error || 'Decryption failed');
         setAuthStep('selectMethod');
-        await window.electronAPI.debugLog('SecretManager', 'Decryption FAILED', { error: result.error });
       }
     } catch (err) {
-      const errorMsg = (err as Error).message;
-      await window.electronAPI.debugLog('SecretManager', 'EXCEPTION in performDecrypt', { error: errorMsg });
-      setError(`Error: ${errorMsg}`);
+      setError(`Error: ${(err as Error).message}`);
       setAuthStep('selectMethod');
     } finally {
       setLoading(false);
@@ -362,14 +350,14 @@ export const SecretManager: React.FC<SecretManagerProps> = ({ onEditingChange })
 
   // Get mode-specific text
   const getAuthDescription = () => {
-    if (securityMode === 'simple') {
+    if (SECURITY_MODE === 'simple') {
       return "You'll authenticate with Windows Hello (PIN or fingerprint).";
     }
     return "You'll authenticate with Windows Hello and your KeePass password.";
   };
 
   const getInfoSteps = () => {
-    if (securityMode === 'simple') {
+    if (SECURITY_MODE === 'simple') {
       return [
         'Click the decrypt button when you need to view or edit your secrets',
         'Authenticate with Windows Hello (PIN or fingerprint)',
@@ -538,10 +526,10 @@ STRIPE_KEY=sk_live_..."
                       />
                       <div className="method-content">
                         <strong>
-                          {securityMode === 'simple' ? 'Windows Hello' : 'Windows Hello + KeePass'}
+                          {SECURITY_MODE === 'simple' ? 'Windows Hello' : 'Windows Hello + KeePass'}
                         </strong>
                         <span className="method-desc">
-                          {securityMode === 'simple'
+                          {SECURITY_MODE === 'simple'
                             ? 'Use your PIN or fingerprint'
                             : 'Use your PIN or fingerprint (Recommended)'}
                         </span>
@@ -577,7 +565,7 @@ STRIPE_KEY=sk_live_..."
 
                   {decryptMethod === 'windowsHello' && (
                     <p className="info-text">
-                      {securityMode === 'simple'
+                      {SECURITY_MODE === 'simple'
                         ? "You'll be prompted for your Windows Hello PIN or fingerprint."
                         : "You'll be prompted for your Windows Hello PIN and KeePass password."}
                     </p>

@@ -1,0 +1,17 @@
+[Unit]
+Description=Scrt Session Daemon
+After=default.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/scrt-daemon
+Restart=on-failure
+RestartSec=5
+
+# Security hardening
+NoNewPrivileges=true
+# Note: Removed ProtectSystem/ProtectHome/PrivateTmp for WSL2 compatibility
+# The socket is created in XDG_RUNTIME_DIR which needs write access
+
+[Install]
+WantedBy=default.target

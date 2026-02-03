@@ -15,12 +15,6 @@ interface SimpleSecretSettings {
   };
 }
 
-interface LicenseStatus {
-  isLicensed: boolean;
-  email?: string;
-  activatedAt?: string;
-}
-
 export const Settings: React.FC = () => {
   const [autoLockInterval, setAutoLockInterval] = useState<AutoLockInterval>(5);
   const [autoLockEnabled, setAutoLockEnabled] = useState(false);
@@ -30,16 +24,9 @@ export const Settings: React.FC = () => {
   const [settings, setSettings] = useState<SimpleSecretSettings | null>(null);
   const [sessionDuration, setSessionDuration] = useState<SessionDuration>('2hours');
 
-  // License state
-  const [licenseStatus, setLicenseStatus] = useState<LicenseStatus | null>(null);
-  const [licenseKey, setLicenseKey] = useState('');
-  const [licenseEmail, setLicenseEmail] = useState('');
-  const [isActivating, setIsActivating] = useState(false);
-
   useEffect(() => {
     loadAutoLockSettings();
     loadSimpleSecretSettings();
-    loadLicenseStatus();
   }, []);
 
   const loadAutoLockSettings = async () => {
@@ -70,53 +57,6 @@ export const Settings: React.FC = () => {
     } catch (error) {
       console.error('Failed to load LLM Secrets settings:', error);
     }
-  };
-
-  const loadLicenseStatus = async () => {
-    console.log('[Settings] Loading license status...');
-    try {
-      const result = await window.electronAPI.checkLicense();
-      console.log('[Settings] checkLicense result:', result);
-      if (result.success) {
-        setLicenseStatus({
-          isLicensed: result.isLicensed || false,
-          email: result.email,
-          activatedAt: result.activatedAt
-        });
-      } else {
-        console.error('[Settings] checkLicense failed:', result.error);
-      }
-    } catch (error) {
-      console.error('[Settings] Failed to load license status:', error);
-    }
-  };
-
-  const handleActivateLicense = async () => {
-    if (!licenseKey.trim() || !licenseEmail.trim()) {
-      setMessage({ type: 'error', text: 'Please enter both license key and email' });
-      setTimeout(() => setMessage(null), 3000);
-      return;
-    }
-
-    setIsActivating(true);
-    setMessage(null);
-
-    try {
-      const result = await window.electronAPI.activateLicense(licenseKey.trim(), licenseEmail.trim());
-      if (result.success) {
-        setMessage({ type: 'success', text: 'License activated successfully!' });
-        setLicenseKey('');
-        setLicenseEmail('');
-        loadLicenseStatus();
-      } else {
-        setMessage({ type: 'error', text: result.error || 'Failed to activate license' });
-      }
-    } catch (error) {
-      setMessage({ type: 'error', text: 'Failed to activate license' });
-    }
-
-    setIsActivating(false);
-    setTimeout(() => setMessage(null), 5000);
   };
 
   const handleAutoLockChange = async (event: React.ChangeEvent<HTMLSelectElement>) => {
@@ -200,96 +140,22 @@ export const Settings: React.FC = () => {
     setTimeout(() => setMessage(null), 5000);
   };
 
+  // This version is Simple mode only
   const getSecurityModeDisplay = () => {
-    if (!settings) return 'Loading...';
-    return settings.securityMode === 'simple'
-      ? 'Simple (Windows Hello only)'
-      : 'Advanced (Windows Hello + KeePass)';
+    return 'Simple (Windows Hello only)';
   };
 
   return (
     <div className="settings">
       <div className="card">
-<<<<<<< Updated upstream
         <h2>Settings</h2>
         <p>Configure your LLM Secrets application preferences</p>
-=======
-        <div className="settings-header">
-          <div>
-            <h2>Settings</h2>
-            <p>Configure your Simple Secret application preferences</p>
-          </div>
-          <span className="version-badge">Simple Secret v3.0.0</span>
-        </div>
->>>>>>> Stashed changes
 
         {message && (
           <div className={`message ${message.type}`}>
             {message.text}
           </div>
         )}
-
-        <div className="settings-section">
-          <h3>License</h3>
-          {licenseStatus?.isLicensed ? (
-            <div className="license-activated">
-              <div className="license-status-badge success">
-                Licensed
-              </div>
-              <div className="license-details">
-                <p><strong>Email:</strong> {licenseStatus.email}</p>
-                {licenseStatus.activatedAt && (
-                  <p><strong>Activated:</strong> {new Date(licenseStatus.activatedAt).toLocaleDateString()}</p>
-                )}
-              </div>
-            </div>
-          ) : (
-            <div className="license-form">
-              <p className="settings-note" style={{ marginBottom: '12px' }}>
-                Enter your license key and the email you used during purchase.
-              </p>
-              <div className="license-input-group">
-                <input
-                  type="email"
-                  value={licenseEmail}
-                  onChange={(e) => setLicenseEmail(e.target.value)}
-                  placeholder="Email used for purchase"
-                  className="license-input"
-                />
-                <input
-                  type="text"
-                  value={licenseKey}
-                  onChange={(e) => setLicenseKey(e.target.value.toUpperCase())}
-                  placeholder="XXXX-XXXX-XXXX-XXXX"
-                  className="license-input"
-                  maxLength={19}
-                />
-                <button
-                  className="btn-primary"
-                  onClick={handleActivateLicense}
-                  disabled={isActivating || !licenseKey || !licenseEmail}
-                >
-                  {isActivating ? 'Activating...' : 'Activate'}
-                </button>
-              </div>
-              <p className="settings-note" style={{ marginTop: '8px', fontSize: '0.85rem' }}>
-                Need a license? <a href="https://llmsecrets.com" target="_blank" rel="noopener noreferrer">Purchase at llmsecrets.com</a>
-              </p>
-            </div>
-          )}
-        </div>
-
-        <div className="settings-section">
-          <h3>Security Mode</h3>
-          <div className="settings-value">
-            <strong>{getSecurityModeDisplay()}</strong>
-          </div>
-          <p className="settings-note">
-            {settings?.securityMode === 'simple'
-              ? 'Your secrets are protected with Windows Hello and DPAPI encryption.'
-              : 'Your secrets are protected with Windows Hello and a KeePass database.'}
-          </p>
-        </div>
 
         <div className="settings-section">
           <h3>Session Duration</h3>
@@ -305,11 +171,6 @@ export const Settings: React.FC = () => {
             <option value="8hours">8 hours</option>
             <option value="until_restart">Until app restart</option>
           </select>
-        </div>
-
-        <div className="settings-section">
-          <h3>Theme</h3>
-          <p>Use the theme toggle button in the header to switch between light and dark modes.</p>
         </div>
 
         <div className="settings-section">
@@ -361,55 +222,9 @@ export const Settings: React.FC = () => {
           </div>
         </div>
 
-        <div className="settings-section">
-          <h3>Cloud Backup Status</h3>
-          {settings?.backup ? (
-            <>
-              <div className="settings-grid">
-                <div className="settings-item">
-                  <span className="label">Recovery Password:</span>
-                  <span className={`value ${settings.backup.recoveryPasswordSet ? 'success' : 'warning'}`}>
-                    {settings.backup.recoveryPasswordSet ? 'Set' : 'Not Set'}
-                  </span>
-                </div>
-                <div className="settings-item">
-                  <span className="label">Backup Frequency:</span>
-                  <span className="value">{settings.backup.frequency}</span>
-                </div>
-              </div>
-              <p className="settings-note">
-                Go to the Backup tab to configure cloud backup settings.
-              </p>
-            </>
-          ) : (
-            <p>Loading backup settings...</p>
-          )}
-        </div>
       </div>
 
       <style>{`
-        .settings-header {
-          display: flex;
-          align-items: flex-start;
-          justify-content: space-between;
-          margin-bottom: 16px;
-        }
-        .settings-header h2 {
-          margin: 0 0 4px 0;
-        }
-        .settings-header p {
-          margin: 0;
-          color: var(--text-secondary, #666);
-        }
-        .version-badge {
-          background: var(--accent-color, #2563eb);
-          color: white;
-          padding: 4px 12px;
-          border-radius: 16px;
-          font-size: 12px;
-          font-weight: 600;
-          white-space: nowrap;
-        }
         .settings-value {
           background: var(--card-bg, #f5f5f5);
           padding: 12px 16px;
@@ -433,59 +248,6 @@ export const Settings: React.FC = () => {
         }
         .settings-item .value.success {
           color: #16a34a;
-        }
-        .license-activated {
-          display: flex;
-          align-items: center;
-          gap: 16px;
-          padding: 12px 16px;
-          background: var(--card-bg, #f5f5f5);
-          border-radius: 8px;
-        }
-        .license-status-badge {
-          padding: 6px 12px;
-          border-radius: 6px;
-          font-weight: 600;
-          font-size: 0.9rem;
-        }
-        .license-status-badge.success {
-          background: #dcfce7;
-          color: #16a34a;
-        }
-        .license-details p {
-          margin: 4px 0;
-          font-size: 0.9rem;
-        }
-        .license-form {
-          padding: 12px 0;
-        }
-        .license-input-group {
-          display: flex;
-          flex-direction: column;
-          gap: 8px;
-        }
-        .license-input {
-          padding: 10px 12px;
-          border: 1px solid var(--border-color, #e5e7eb);
-          border-radius: 6px;
-          font-size: 0.95rem;
-          background: var(--input-bg, white);
-          color: var(--text-color, #1f2937);
-        }
-        .license-input:focus {
-          outline: none;
-          border-color: #2563eb;
-          box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
-        }
-        .license-input::placeholder {
-          color: var(--text-muted, #9ca3af);
-        }
-        .settings-note a {
-          color: #2563eb;
-          text-decoration: none;
-        }
-        .settings-note a:hover {
-          text-decoration: underline;
         }
         .settings-item .value.warning {
           color: #ca8a04;

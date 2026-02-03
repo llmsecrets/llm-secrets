@@ -1,272 +1,369 @@
 import * as React from 'react';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+
+interface SecretDescription {
+  id?: string;  // Stable identifier for UI
+  name: string;
+  category: string;
+  purpose: string;
+  whenToUse: string;
+  example: string;
+}
+
+interface AIToolsSettings {
+  claudeCode: boolean;
+  codexCLI: boolean;
+}
+
+const CATEGORIES = [
+  { value: 'blockchain', label: 'Blockchain' },
+  { value: 'api', label: 'API' },
+  { value: 'database', label: 'Database' },
+  { value: 'cloud', label: 'Cloud' },
+  { value: 'other', label: 'Other' },
+];
+
+// Generate a unique ID
+const generateId = () => `secret_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+// Ensure all secrets have IDs
+const ensureIds = (secrets: SecretDescription[]): SecretDescription[] => {
+  return secrets.map(s => ({
+    ...s,
+    id: s.id || generateId()
+  }));
+};
 
 export const ClaudeMd: React.FC = () => {
-  const [copied, setCopied] = useState(false);
+  const [secrets, setSecrets] = useState<SecretDescription[]>([]);
+  const [aiTools, setAiTools] = useState<AIToolsSettings>({ claudeCode: true, codexCLI: true });
+  const [expandedSecrets, setExpandedSecrets] = useState<Set<string>>(new Set());
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [generating, setGenerating] = useState(false);
+  const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
-  const claudeMdContent = `# Scrt - Claude Code Integration
+  useEffect(() => {
+    loadData();
+  }, []);
 
-## Security Rules (MUST FOLLOW)
-- NEVER display secret values in output or logs
-- NEVER store decrypted content in files
-- NEVER include secrets in git commits
-- ALWAYS use /scrt-run or psst for commands needing secrets
-- ALWAYS prompt user before adding new secrets
-
-## When to Prompt User
-Prompt user for input when:
-- A command fails due to missing API key/token
-- Setting up a new service integration
-- Rotating or updating existing credentials
-
-Use: "I need to add [SECRET_NAME] to your encrypted .env.
-Please use /dscrt to decrypt, add the secret, then /escrt to re-encrypt."
-
-## ENV Structure (Secret Names Only)
-
-### Blockchain / Web3
-| Secret | Purpose | Used By |
-|--------|---------|---------|
-| PRIVATE_KEY | Wallet signing key | Foundry deploy scripts |
-| PUBLIC_KEY | Wallet address (0x...) | Contract verification |
-| ETHERSCAN_API_KEY | Contract verification | forge verify-contract |
-| ALCHEMY_API_KEY | RPC access | All blockchain calls |
-| ALCHEMY_RPC_URL | Mainnet RPC endpoint | forge script --rpc-url |
-| ALCHEMY_SEPOLIA_RPC_URL | Testnet RPC | Testing deployments |
-| ALCHEMY_ARBITRUM_RPC_URL | Arbitrum RPC | L2 deployments |
-
-### Google Cloud / Services
-| Secret | Purpose | Used By |
-|--------|---------|---------|
-| GOOGLE_SERVICE_ACCOUNT_PATH | Service account JSON | sheets.py, gmail.py |
-| GOOGLE_SERVICE_ACCOUNT_EMAIL | SA email address | API authentication |
-| GOOGLE_DELEGATED_USER | User to impersonate | Gmail sending |
-| GOOGLE_PROJECT_ID | GCP project | All GCP services |
-| GCP_INSTANCE_NAME | VM instance name | gcp-ssh.ps1 |
-| GCP_ZONE | VM zone | SSH connections |
-| GCP_EXTERNAL_IP | Server IP | Direct connections |
-
-### GitHub
-| Secret | Purpose | Used By |
-|--------|---------|---------|
-| GITHUB_PAT | Personal access token | git push, API calls |
-| GITHUB_USERNAME | Account name | Repository operations |
-
-### Local Paths
-| Secret | Purpose | Used By |
-|--------|---------|---------|
-| KEEP_SCRT_PATH | Secrets folder location | All scripts |
-| LENDVEST_PROJECT_PATH | Foundry project | deploy.ps1 |
-| NYC_CODE_PATH | Backend project | API deployments |
-| CHROME_PROFILE_PATH | MetaMask profile | Browser automation |
-| CHROME_DEFAULT_PROFILE_PATH | Default profile | Google auth |
-
-## Available Tools
-
-### /dscrt - Decrypt ENV
-Decrypts .env.encrypted for manual editing.
-Requires: Windows Hello + KeePass password
-Use when: Adding/modifying secrets
-
-### /escrt - Encrypt ENV
-Re-encrypts .env after editing.
-Requires: Active session
-Use when: Done editing secrets
-
-### psst - CLI Secrets Manager
-Command-line tool using Windows Credential Manager.
-Use: psst --global run <command>
-Use: psst --global PRIVATE_KEY ALCHEMY_API_KEY -- <command>
-
-## Common Workflows
-
-### Deploy Smart Contract
-psst --global run forge script script/Deploy.s.sol --rpc-url mainnet --broadcast --verify
-
-### Send Email via Gmail
-python gmail.py send "recipient@example.com" "Subject" "Body"
-
-### SSH to GCP Server
-.\\gcp-ssh.ps1
-
-### Push to GitHub (with PAT)
-git push origin main`;
-
-  const handleCopy = async () => {
+  const loadData = async () => {
     try {
-      await navigator.clipboard.writeText(claudeMdContent);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch (err) {
-      console.error('Failed to copy:', err);
+      const [descriptionsResult, settingsResult] = await Promise.all([
+        window.electronAPI.getSecretDescriptions(),
+        window.electronAPI.getAIToolsSettings(),
+      ]);
+
+      if (descriptionsResult.success && descriptionsResult.data) {
+        setSecrets(ensureIds(descriptionsResult.data));
+      }
+
+      if (settingsResult.success && settingsResult.data) {
+        setAiTools(settingsResult.data);
+      }
+    } catch (error) {
+      console.error('Failed to load data:', error);
+    } finally {
+      setLoading(false);
     }
   };
 
+  const toggleSecretExpanded = (id: string) => {
+    setExpandedSecrets(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
+  const updateSecret = (id: string, field: keyof SecretDescription, value: string) => {
+    setSecrets(prev => prev.map(s =>
+      s.id === id ? { ...s, [field]: value } : s
+    ));
+  };
+
+  const addSecret = () => {
+    const newId = generateId();
+    const newSecret: SecretDescription = {
+      id: newId,
+      name: 'NEW_SECRET',
+      category: 'other',
+      purpose: '',
+      whenToUse: '',
+      example: '',
+    };
+    setSecrets(prev => [...prev, newSecret]);
+    setExpandedSecrets(prev => new Set(prev).add(newId));
+  };
+
+  const removeSecret = (id: string) => {
+    setSecrets(prev => prev.filter(s => s.id !== id));
+    setExpandedSecrets(prev => {
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+  };
+
+  const getFilledFieldCount = (secret: SecretDescription): number => {
+    let count = 0;
+    if (secret.purpose?.trim()) count++;
+    if (secret.whenToUse?.trim()) count++;
+    if (secret.example?.trim()) count++;
+    return count;
+  };
+
+  const handleSaveDescriptions = async () => {
+    setSaving(true);
+    setMessage(null);
+    try {
+      const result = await window.electronAPI.saveSecretDescriptions(secrets);
+      if (result.success) {
+        setMessage({ type: 'success', text: 'Descriptions saved!' });
+      } else {
+        setMessage({ type: 'error', text: result.error || 'Failed to save' });
+      }
+    } catch (error) {
+      setMessage({ type: 'error', text: (error as Error).message });
+    } finally {
+      setSaving(false);
+      setTimeout(() => setMessage(null), 3000);
+    }
+  };
+
+  const handleSaveAITools = async (newSettings: AIToolsSettings) => {
+    setAiTools(newSettings);
+    try {
+      await window.electronAPI.saveAIToolsSettings(newSettings);
+    } catch (error) {
+      console.error('Failed to save AI tools settings:', error);
+    }
+  };
+
+  const handleGenerateFiles = async () => {
+    setGenerating(true);
+    setMessage(null);
+    try {
+      // Save descriptions first
+      await window.electronAPI.saveSecretDescriptions(secrets);
+      // Generate files
+      const result = await window.electronAPI.generateClaudeMdWithDescriptions(secrets);
+      if (result.success) {
+        setMessage({ type: 'success', text: 'Files generated successfully!' });
+      } else {
+        setMessage({ type: 'error', text: result.error || 'Failed to generate files' });
+      }
+    } catch (error) {
+      setMessage({ type: 'error', text: (error as Error).message });
+    } finally {
+      setGenerating(false);
+      setTimeout(() => setMessage(null), 3000);
+    }
+  };
+
+  const handleViewClaudeMd = async () => {
+    try {
+      await window.electronAPI.openClaudeMd();
+    } catch (error) {
+      console.error('Failed to open CLAUDE.md:', error);
+    }
+  };
+
+  const handleViewAgentsMd = async () => {
+    try {
+      await window.electronAPI.openAgentsMd();
+    } catch (error) {
+      console.error('Failed to open AGENTS.md:', error);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="claude-md">
+        <div className="card">
+          <div className="loading-state">Loading...</div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="claude-md">
-      <div className="card">
-        <div className="claude-md-header">
-          <h2>Claude Code Integration</h2>
-          <button
-            className={`btn-secondary copy-btn ${copied ? 'copied' : ''}`}
-            onClick={handleCopy}
+      <div className="card ai-tools-card">
+        {/* Header */}
+        <div className="ai-tools-header">
+          <div className="ai-tools-title">
+            <h2>AI Tool Integration</h2>
+            <p className="ai-tools-subtitle">
+              Configure which AI coding tools to generate instruction files for.
+              Describe your secrets so AI assistants know when and how to use them.
+            </p>
+          </div>
+          <div className="ai-tools-actions">
+            <button className="btn-outline" onClick={handleViewClaudeMd}>
+              View CLAUDE.md
+            </button>
+            <button className="btn-outline" onClick={handleViewAgentsMd}>
+              View AGENTS.md
+            </button>
+          </div>
+        </div>
+
+        {/* AI Tool Selection */}
+        <div className="ai-tool-selection">
+          <label
+            className={`ai-tool-option ${aiTools.claudeCode ? 'selected' : ''}`}
+            onClick={() => handleSaveAITools({ ...aiTools, claudeCode: !aiTools.claudeCode })}
           >
-            {copied ? 'Copied!' : 'Copy to Clipboard'}
+            <input
+              type="checkbox"
+              checked={aiTools.claudeCode}
+              onChange={() => {}}
+            />
+            <span className="ai-tool-name">Claude Code</span>
+            <span className="ai-tool-file">CLAUDE.md</span>
+          </label>
+          <label
+            className={`ai-tool-option ${aiTools.codexCLI ? 'selected' : ''}`}
+            onClick={() => handleSaveAITools({ ...aiTools, codexCLI: !aiTools.codexCLI })}
+          >
+            <input
+              type="checkbox"
+              checked={aiTools.codexCLI}
+              onChange={() => {}}
+            />
+            <span className="ai-tool-name">Codex CLI</span>
+            <span className="ai-tool-file">AGENTS.md</span>
+          </label>
+        </div>
+
+        {/* Secrets List */}
+        <div className="secrets-description-list">
+          {secrets.map((secret) => {
+            const secretId = secret.id || secret.name;
+            const isExpanded = expandedSecrets.has(secretId);
+            return (
+              <div
+                key={secretId}
+                className={`secret-item ${isExpanded ? 'expanded' : ''}`}
+              >
+                <div
+                  className="secret-header"
+                  onClick={() => toggleSecretExpanded(secretId)}
+                >
+                  <span className="expand-icon">{isExpanded ? '▼' : '▶'}</span>
+                  <span className="secret-name">{secret.name}</span>
+                  <span className="secret-category">{secret.category?.toUpperCase() || 'OTHER'}</span>
+                  <span className="secret-field-count">{getFilledFieldCount(secret)}/3</span>
+                </div>
+
+                {isExpanded && (
+                  <div className="secret-details">
+                    <div className="form-row">
+                      <label>Name</label>
+                      <input
+                        type="text"
+                        value={secret.name}
+                        onChange={(e) => updateSecret(secretId, 'name', e.target.value)}
+                        placeholder="SECRET_NAME"
+                      />
+                    </div>
+                    <div className="form-row">
+                      <label>Category</label>
+                      <select
+                        value={secret.category}
+                        onChange={(e) => updateSecret(secretId, 'category', e.target.value)}
+                      >
+                        {CATEGORIES.map(cat => (
+                          <option key={cat.value} value={cat.value}>{cat.label}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="form-row">
+                      <label>Purpose</label>
+                      <input
+                        type="text"
+                        value={secret.purpose}
+                        onChange={(e) => updateSecret(secretId, 'purpose', e.target.value)}
+                        placeholder="What this secret is for"
+                      />
+                    </div>
+                    <div className="form-row">
+                      <label>When to Use</label>
+                      <input
+                        type="text"
+                        value={secret.whenToUse}
+                        onChange={(e) => updateSecret(secretId, 'whenToUse', e.target.value)}
+                        placeholder="When the AI should use this secret"
+                      />
+                    </div>
+                    <div className="form-row">
+                      <label>Example Usage</label>
+                      <input
+                        type="text"
+                        value={secret.example}
+                        onChange={(e) => updateSecret(secretId, 'example', e.target.value)}
+                        placeholder="process.env.SECRET_NAME"
+                      />
+                    </div>
+                    <button
+                      className="btn-danger btn-small"
+                      onClick={() => removeSecret(secretId)}
+                    >
+                      Remove
+                    </button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Action Buttons */}
+        <div className="ai-tools-buttons">
+          <button className="btn-outline" onClick={addSecret}>
+            + Add Secret
+          </button>
+          <button
+            className="btn-outline"
+            onClick={handleSaveDescriptions}
+            disabled={saving}
+          >
+            {saving ? 'Saving...' : 'Save Descriptions'}
+          </button>
+          <button
+            className="btn-primary btn-generate"
+            onClick={handleGenerateFiles}
+            disabled={generating}
+          >
+            {generating ? 'Generating...' : 'Generate Files'}
           </button>
         </div>
 
-        <p className="claude-md-intro">
-          This reference document tells Claude Code how to work with Scrt securely.
-          Copy this content to your project's CLAUDE.md file.
-        </p>
+        {/* Message */}
+        {message && (
+          <div className={`ai-tools-message ${message.type}`}>
+            {message.text}
+          </div>
+        )}
 
-        <div className="claude-md-content">
-          <section className="claude-section">
-            <h3>Security Rules (MUST FOLLOW)</h3>
-            <ul className="security-rules">
-              <li><span className="rule-icon">🚫</span> NEVER display secret values in output or logs</li>
-              <li><span className="rule-icon">🚫</span> NEVER store decrypted content in files</li>
-              <li><span className="rule-icon">🚫</span> NEVER include secrets in git commits</li>
-              <li><span className="rule-icon">✅</span> ALWAYS use psst for commands needing secrets</li>
-              <li><span className="rule-icon">✅</span> ALWAYS prompt user before adding new secrets</li>
-            </ul>
-          </section>
-
-          <section className="claude-section">
-            <h3>When to Prompt User</h3>
-            <p>Prompt user for input when:</p>
-            <ul>
-              <li>A command fails due to missing API key/token</li>
-              <li>Setting up a new service integration</li>
-              <li>Rotating or updating existing credentials</li>
-            </ul>
-            <div className="code-example">
-              <code>
-                "I need to add [SECRET_NAME] to your encrypted .env.<br/>
-                Please use /dscrt to decrypt, add the secret, then /escrt to re-encrypt."
-              </code>
+        {/* Supported AI Tools Info */}
+        <div className="supported-ai-tools">
+          <h3>Supported AI Tools</h3>
+          <div className="ai-tools-info-grid">
+            <div className="ai-tool-info">
+              <strong>Claude Code (Anthropic)</strong>
+              <p>Uses CLAUDE.md for project instructions. Supports /dscrt and /escrt commands for secret management.</p>
             </div>
-          </section>
-
-          <section className="claude-section">
-            <h3>ENV Structure (Secret Names Only)</h3>
-
-            <h4>Blockchain / Web3</h4>
-            <table className="env-table">
-              <thead>
-                <tr><th>Secret</th><th>Purpose</th><th>Used By</th></tr>
-              </thead>
-              <tbody>
-                <tr><td>PRIVATE_KEY</td><td>Wallet signing key</td><td>Foundry deploy scripts</td></tr>
-                <tr><td>PUBLIC_KEY</td><td>Wallet address (0x...)</td><td>Contract verification</td></tr>
-                <tr><td>ETHERSCAN_API_KEY</td><td>Contract verification</td><td>forge verify-contract</td></tr>
-                <tr><td>ALCHEMY_API_KEY</td><td>RPC access</td><td>All blockchain calls</td></tr>
-                <tr><td>ALCHEMY_RPC_URL</td><td>Mainnet RPC endpoint</td><td>forge script --rpc-url</td></tr>
-                <tr><td>ALCHEMY_SEPOLIA_RPC_URL</td><td>Testnet RPC</td><td>Testing deployments</td></tr>
-                <tr><td>ALCHEMY_ARBITRUM_RPC_URL</td><td>Arbitrum RPC</td><td>L2 deployments</td></tr>
-              </tbody>
-            </table>
-
-            <h4>Google Cloud / Services</h4>
-            <table className="env-table">
-              <thead>
-                <tr><th>Secret</th><th>Purpose</th><th>Used By</th></tr>
-              </thead>
-              <tbody>
-                <tr><td>GOOGLE_SERVICE_ACCOUNT_PATH</td><td>Service account JSON</td><td>sheets.py, gmail.py</td></tr>
-                <tr><td>GOOGLE_SERVICE_ACCOUNT_EMAIL</td><td>SA email address</td><td>API authentication</td></tr>
-                <tr><td>GOOGLE_DELEGATED_USER</td><td>User to impersonate</td><td>Gmail sending</td></tr>
-                <tr><td>GOOGLE_PROJECT_ID</td><td>GCP project</td><td>All GCP services</td></tr>
-                <tr><td>GCP_INSTANCE_NAME</td><td>VM instance name</td><td>gcp-ssh.ps1</td></tr>
-                <tr><td>GCP_ZONE</td><td>VM zone</td><td>SSH connections</td></tr>
-                <tr><td>GCP_EXTERNAL_IP</td><td>Server IP</td><td>Direct connections</td></tr>
-              </tbody>
-            </table>
-
-            <h4>GitHub</h4>
-            <table className="env-table">
-              <thead>
-                <tr><th>Secret</th><th>Purpose</th><th>Used By</th></tr>
-              </thead>
-              <tbody>
-                <tr><td>GITHUB_PAT</td><td>Personal access token</td><td>git push, API calls</td></tr>
-                <tr><td>GITHUB_USERNAME</td><td>Account name</td><td>Repository operations</td></tr>
-              </tbody>
-            </table>
-
-            <h4>Local Paths</h4>
-            <table className="env-table">
-              <thead>
-                <tr><th>Secret</th><th>Purpose</th><th>Used By</th></tr>
-              </thead>
-              <tbody>
-                <tr><td>KEEP_SCRT_PATH</td><td>Secrets folder location</td><td>All scripts</td></tr>
-                <tr><td>LENDVEST_PROJECT_PATH</td><td>Foundry project</td><td>deploy.ps1</td></tr>
-                <tr><td>NYC_CODE_PATH</td><td>Backend project</td><td>API deployments</td></tr>
-                <tr><td>CHROME_PROFILE_PATH</td><td>MetaMask profile</td><td>Browser automation</td></tr>
-                <tr><td>CHROME_DEFAULT_PROFILE_PATH</td><td>Default profile</td><td>Google auth</td></tr>
-              </tbody>
-            </table>
-          </section>
-
-          <section className="claude-section">
-            <h3>Available Tools</h3>
-
-            <div className="tool-card">
-              <h4>/dscrt - Decrypt ENV</h4>
-              <p>Decrypts .env.encrypted for manual editing.</p>
-              <p><strong>Requires:</strong> Windows Hello + KeePass password</p>
-              <p><strong>Use when:</strong> Adding/modifying secrets</p>
+            <div className="ai-tool-info">
+              <strong>Codex CLI (OpenAI)</strong>
+              <p>Uses AGENTS.md for agent instructions. The file is automatically discovered in your project root.</p>
             </div>
-
-            <div className="tool-card">
-              <h4>/escrt - Encrypt ENV</h4>
-              <p>Re-encrypts .env after editing.</p>
-              <p><strong>Requires:</strong> Active session</p>
-              <p><strong>Use when:</strong> Done editing secrets</p>
-            </div>
-
-            <div className="tool-card">
-              <h4>psst - CLI Secrets Manager</h4>
-              <p>Command-line tool using Windows Credential Manager.</p>
-              <div className="code-example">
-                <code>psst --global run &lt;command&gt;</code>
-                <code>psst --global PRIVATE_KEY ALCHEMY_API_KEY -- &lt;command&gt;</code>
-              </div>
-            </div>
-          </section>
-
-          <section className="claude-section">
-            <h3>Common Workflows</h3>
-
-            <div className="workflow-item">
-              <h4>Deploy Smart Contract</h4>
-              <div className="code-example">
-                <code>psst --global run forge script script/Deploy.s.sol --rpc-url mainnet --broadcast --verify</code>
-              </div>
-            </div>
-
-            <div className="workflow-item">
-              <h4>Send Email via Gmail</h4>
-              <div className="code-example">
-                <code>python gmail.py send "recipient@example.com" "Subject" "Body"</code>
-              </div>
-            </div>
-
-            <div className="workflow-item">
-              <h4>SSH to GCP Server</h4>
-              <div className="code-example">
-                <code>.\gcp-ssh.ps1</code>
-              </div>
-            </div>
-
-            <div className="workflow-item">
-              <h4>Push to GitHub</h4>
-              <div className="code-example">
-                <code>git push origin main</code>
-              </div>
-            </div>
-          </section>
+          </div>
         </div>
       </div>
     </div>

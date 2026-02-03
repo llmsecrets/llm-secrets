@@ -44,6 +44,21 @@ export interface AIToolsSettings {
   codexCLI: boolean;
 }
 
+export interface TransactionDetails {
+  id: string;
+  to: string;
+  toDisplay: string;
+  value: string;
+  valueDisplay: string;
+  gasDisplay: string;
+  totalCost: string;
+  network: string;
+  networkName: string;
+  functionName?: string;
+  functionArgs?: string[];
+  data?: string;
+}
+
 export interface ElectronAPI {
   // Setup Wizard
   checkFirstRun: () => Promise<{success: boolean, isFirstRun: boolean, error?: string}>;
@@ -94,13 +109,12 @@ export interface ElectronAPI {
   activityLogPath: () => Promise<{success: boolean, data?: string, error?: string}>;
   logNavigation: (from: string, to: string) => Promise<{success: boolean}>;
   logClick: (buttonName: string, component: string) => Promise<{success: boolean}>;
-  debugLog: (context: string, message: string, data?: Record<string, unknown>) => Promise<{success: boolean}>;
 
   // LLM Secrets
   getSimpleSecretSettings: () => Promise<{success: boolean, data?: any, error?: string}>;
   checkSimpleSecretSetup: () => Promise<{success: boolean, isSetUp?: boolean, hasDpapiKey?: boolean, hasKeePass?: boolean, settings?: any, error?: string}>;
   createSimpleVault: () => Promise<{success: boolean, masterKey?: string, error?: string}>;
-  authenticateSimple: () => Promise<{success: boolean, masterKey?: string, error?: string}>;
+  authenticateSimple: () => Promise<{success: boolean, error?: string}>;
   openBackupUpload: () => Promise<{success: boolean, error?: string}>;
   getBackupStatus: () => Promise<{success: boolean, data?: any, error?: string}>;
   setRecoveryPassword: (password: string) => Promise<{success: boolean, error?: string}>;
@@ -116,13 +130,22 @@ export interface ElectronAPI {
   openAgentsMd: () => Promise<{success: boolean, error?: string}>;
 
   // License
-  licenseCheck: () => Promise<{success: boolean, isLicensed: boolean, error?: string}>;
-  licenseStatus: () => Promise<{success: boolean, data?: {activated: boolean, email?: string, activatedAt?: string, key?: string}, error?: string}>;
-  licenseValidate: (key: string) => Promise<{success: boolean, isValid: boolean, error?: string}>;
-  licenseActivate: (key: string, email: string) => Promise<{success: boolean, error?: string}>;
-  licenseActivateKeyOnly: (key: string) => Promise<{success: boolean, error?: string}>;
-  licenseDeactivate: () => Promise<{success: boolean, error?: string}>;
-  licenseOpenPurchase: () => Promise<{success: boolean, error?: string}>;
+  activateLicense: (licenseKey: string, email: string) => Promise<{success: boolean, error?: string}>;
+  checkLicense: () => Promise<{success: boolean, isLicensed?: boolean, email?: string, activatedAt?: string, error?: string}>;
+  removeLicense: () => Promise<{success: boolean, error?: string}>;
+
+  // WSL Daemon (when running in WSL2 environment)
+  wslCheckDaemon: () => Promise<{success: boolean, available?: boolean, error?: string}>;
+  wslUnlock: (ttl?: number) => Promise<{success: boolean, count?: number, error?: string}>;
+  wslStatus: () => Promise<{success: boolean, active?: boolean, remaining?: number, error?: string}>;
+  wslListSecrets: () => Promise<{success: boolean, names?: string[], error?: string}>;
+  wslLogout: () => Promise<{success: boolean, error?: string}>;
+  wslRunCommand: (command: string, workingDir?: string) => Promise<{success: boolean, exitCode?: number, output?: string, error?: string}>;
+
+  // Transaction confirmation
+  txConfirm: (txId: string, confirmed: boolean) => Promise<{success: boolean, error?: string}>;
+  txGetPending: (txId: string) => Promise<{success: boolean, data?: TransactionDetails, error?: string}>;
+  onTxShowConfirm: (callback: (data: TransactionDetails) => void) => void;
 }
 
 contextBridge.exposeInMainWorld('electronAPI', {
@@ -177,7 +200,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   activityLogPath: () => ipcRenderer.invoke('activity-log-path'),
   logNavigation: (from: string, to: string) => ipcRenderer.invoke('log-navigation', from, to),
   logClick: (buttonName: string, component: string) => ipcRenderer.invoke('log-click', buttonName, component),
-  debugLog: (context: string, message: string, data?: Record<string, unknown>) => ipcRenderer.invoke('debug-log', context, message, data),
 
   // LLM Secrets
   getSimpleSecretSettings: () => ipcRenderer.invoke('get-llm-secrets-settings'),
@@ -199,13 +221,24 @@ contextBridge.exposeInMainWorld('electronAPI', {
   openAgentsMd: () => ipcRenderer.invoke('open-agents-md'),
 
   // License
-  licenseCheck: () => ipcRenderer.invoke('license-check'),
-  licenseStatus: () => ipcRenderer.invoke('license-status'),
-  licenseValidate: (key: string) => ipcRenderer.invoke('license-validate', key),
-  licenseActivate: (key: string, email: string) => ipcRenderer.invoke('license-activate', key, email),
-  licenseActivateKeyOnly: (key: string) => ipcRenderer.invoke('license-activate-key-only', key),
-  licenseDeactivate: () => ipcRenderer.invoke('license-deactivate'),
-  licenseOpenPurchase: () => ipcRenderer.invoke('license-open-purchase'),
+  activateLicense: (licenseKey: string, email: string) => ipcRenderer.invoke('activate-license', licenseKey, email),
+  checkLicense: () => ipcRenderer.invoke('check-license'),
+  removeLicense: () => ipcRenderer.invoke('remove-license'),
+
+  // WSL Daemon (when running in WSL2 environment)
+  wslCheckDaemon: () => ipcRenderer.invoke('wsl-check-daemon'),
+  wslUnlock: (ttl?: number) => ipcRenderer.invoke('wsl-unlock', ttl),
+  wslStatus: () => ipcRenderer.invoke('wsl-status'),
+  wslListSecrets: () => ipcRenderer.invoke('wsl-list-secrets'),
+  wslLogout: () => ipcRenderer.invoke('wsl-logout'),
+  wslRunCommand: (command: string, workingDir?: string) => ipcRenderer.invoke('wsl-run-command', command, workingDir),
+
+  // Transaction confirmation
+  txConfirm: (txId: string, confirmed: boolean) => ipcRenderer.invoke('tx-confirm', txId, confirmed),
+  txGetPending: (txId: string) => ipcRenderer.invoke('tx-get-pending', txId),
+  onTxShowConfirm: (callback: (data: TransactionDetails) => void) => {
+    ipcRenderer.on('tx-show-confirm', (_event, data) => callback(data));
+  },
 } as ElectronAPI);
 
 declare global {

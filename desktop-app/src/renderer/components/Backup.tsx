@@ -24,30 +24,15 @@ export const Backup: React.FC = () => {
 
   const loadBackupStatus = async () => {
     setLoading(true);
-    setError(null);
     try {
       const result = await window.electronAPI.getBackupStatus();
       if (result.success) {
         setStatus(result.data);
       } else {
-        // If we can't load status, show default state (not set up)
-        setStatus({
-          enabled: true,
-          frequency: 'monthly',
-          lastBackup: null,
-          recoveryPasswordSet: false,
-          backupNeeded: true
-        });
+        setError(result.error || 'Failed to load backup status');
       }
     } catch (err) {
-      // On error, show default state so user can set up backup
-      setStatus({
-        enabled: true,
-        frequency: 'monthly',
-        lastBackup: null,
-        recoveryPasswordSet: false,
-        backupNeeded: true
-      });
+      setError((err as Error).message);
     }
     setLoading(false);
   };
@@ -102,10 +87,7 @@ export const Backup: React.FC = () => {
 
   return (
     <div className="backup-container">
-      <div className="backup-header">
-        <h2>Cloud Backup</h2>
-        <span className="version-badge">Simple Secret v3.0.0</span>
-      </div>
+      <h2>Cloud Backup</h2>
       <p className="subtitle">
         Protect your secrets with encrypted cloud backup. If you lose this machine,
         you can restore your secrets using your recovery password.
@@ -228,7 +210,7 @@ export const Backup: React.FC = () => {
       )}
 
       <div className="info-section">
-        <h3>How Simple Secret Backup Works</h3>
+        <h3>How Backup Works</h3>
         <ul>
           <li>Your master key is encrypted with your recovery password</li>
           <li>The encrypted backup is safe to store in the cloud</li>
@@ -243,38 +225,22 @@ export const Backup: React.FC = () => {
           max-width: 800px;
           margin: 0 auto;
         }
-        .backup-header {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
+        .backup-container h2 {
           margin-bottom: 8px;
         }
-        .backup-header h2 {
-          margin: 0;
-        }
-        .version-badge {
-          background: var(--accent-color, #2563eb);
-          color: white;
-          padding: 4px 12px;
-          border-radius: 16px;
-          font-size: 12px;
-          font-weight: 600;
-        }
         .subtitle {
-          color: var(--text-secondary, #666);
+          color: #666;
           margin-bottom: 24px;
         }
         .backup-status-card {
           background: var(--card-bg, #f5f5f5);
-          border-radius: 12px;
+          border-radius: 8px;
           padding: 20px;
           margin-bottom: 24px;
-          border: 1px solid var(--border-color, #e0e0e0);
         }
         .backup-status-card h3 {
           margin-top: 0;
           margin-bottom: 16px;
-          color: var(--text-primary, #1a1a1a);
         }
         .status-grid {
           display: grid;
@@ -283,7 +249,7 @@ export const Backup: React.FC = () => {
         .status-item {
           display: flex;
           justify-content: space-between;
-          padding: 10px 0;
+          padding: 8px 0;
           border-bottom: 1px solid var(--border-color, #e0e0e0);
         }
         .status-item:last-child {
@@ -291,35 +257,29 @@ export const Backup: React.FC = () => {
         }
         .status-item .label {
           font-weight: 500;
-          color: var(--text-primary, #1a1a1a);
         }
         .status-item .value.success {
-          color: #16a34a;
-          font-weight: 600;
+          color: #28a745;
         }
         .status-item .value.warning {
-          color: #ca8a04;
-          font-weight: 600;
+          color: #ffc107;
         }
         .warning-row {
-          background: rgba(202, 138, 4, 0.1);
+          background: #fff3cd;
           margin: 0 -20px;
-          padding: 10px 20px !important;
-          border-radius: 0;
+          padding: 8px 20px !important;
         }
         .setup-section, .upload-section, .password-form {
           background: var(--card-bg, #f5f5f5);
-          border-radius: 12px;
+          border-radius: 8px;
           padding: 20px;
           margin-bottom: 24px;
-          border: 1px solid var(--border-color, #e0e0e0);
         }
         .setup-section h3, .upload-section h3, .password-form h3 {
           margin-top: 0;
-          color: var(--text-primary, #1a1a1a);
         }
         .form-description {
-          color: var(--text-secondary, #666);
+          color: #666;
           margin-bottom: 16px;
         }
         .form-group {
@@ -327,18 +287,11 @@ export const Backup: React.FC = () => {
         }
         .form-input {
           width: 100%;
-          padding: 12px 16px;
+          padding: 12px;
           border: 1px solid var(--border-color, #ccc);
-          border-radius: 8px;
+          border-radius: 4px;
           font-size: 14px;
           box-sizing: border-box;
-          background: var(--input-bg, #fff);
-          color: var(--text-primary, #1a1a1a);
-        }
-        .form-input:focus {
-          outline: none;
-          border-color: var(--accent-color, #2563eb);
-          box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
         }
         .button-group {
           display: flex;
@@ -346,79 +299,65 @@ export const Backup: React.FC = () => {
           margin-top: 16px;
         }
         .btn-primary {
-          background: var(--accent-color, #2563eb);
+          background: #007bff;
           color: white;
           border: none;
           padding: 12px 24px;
-          border-radius: 8px;
+          border-radius: 4px;
           cursor: pointer;
           font-size: 14px;
-          font-weight: 600;
-          transition: background 0.2s, transform 0.2s;
         }
         .btn-primary:hover {
-          background: var(--accent-hover, #1d4ed8);
-          transform: translateY(-1px);
+          background: #0056b3;
         }
         .btn-primary:disabled {
-          background: var(--disabled-bg, #ccc);
+          background: #ccc;
           cursor: not-allowed;
-          transform: none;
         }
         .btn-secondary {
           background: transparent;
-          color: var(--text-secondary, #666);
-          border: 1px solid var(--border-color, #ccc);
+          color: #666;
+          border: 1px solid #ccc;
           padding: 12px 24px;
-          border-radius: 8px;
+          border-radius: 4px;
           cursor: pointer;
           font-size: 14px;
-          font-weight: 500;
-          transition: background 0.2s;
-        }
-        .btn-secondary:hover {
-          background: var(--hover-bg, rgba(0,0,0,0.05));
         }
         .btn-large {
           padding: 16px 32px;
           font-size: 16px;
         }
         .help-text {
-          color: var(--text-secondary, #666);
+          color: #666;
           font-size: 12px;
-          margin-top: 12px;
+          margin-top: 8px;
         }
         .error-message {
-          background: rgba(220, 38, 38, 0.1);
-          color: #dc2626;
-          padding: 12px 16px;
-          border-radius: 8px;
+          background: #f8d7da;
+          color: #721c24;
+          padding: 12px;
+          border-radius: 4px;
           margin-bottom: 16px;
-          border: 1px solid rgba(220, 38, 38, 0.2);
         }
         .info-section {
           background: var(--card-bg, #f5f5f5);
-          border-radius: 12px;
+          border-radius: 8px;
           padding: 20px;
-          border: 1px solid var(--border-color, #e0e0e0);
         }
         .info-section h3 {
           margin-top: 0;
-          color: var(--text-primary, #1a1a1a);
         }
         .info-section ul {
           margin: 0;
           padding-left: 20px;
-          color: var(--text-secondary, #666);
         }
         .info-section li {
           margin-bottom: 8px;
-          line-height: 1.5;
         }
         .loading {
           text-align: center;
           padding: 40px;
-          color: var(--text-secondary, #666);
+          color: #666;
         }
       `}</style>
     </div>

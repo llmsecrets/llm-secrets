@@ -1,0 +1,141 @@
+.TH SCRT 1 "January 2026" "scrt 0.1.0" "User Commands"
+.SH NAME
+scrt \- WSL2 secure secret injector for AI agents
+.SH SYNOPSIS
+.B scrt
+.I command
+.RI [ options ]
+.SH DESCRIPTION
+.B scrt
+is a secure secret management tool designed for AI agent workflows in WSL2.
+It enables commands to use secrets via $env[NAME] substitution without
+exposing the actual values to the calling process or command line.
+.PP
+Secrets are stored encrypted on disk and only decrypted into memory after
+Windows Hello biometric authentication. The daemon runs as a systemd user
+service and communicates via Unix socket.
+.SH COMMANDS
+.TP
+.B unlock \fR[\fIttl\fR]
+Authenticate with Windows Hello and load secrets into memory.
+Optional TTL in seconds (default: 7200 = 2 hours).
+.TP
+.B status
+Check if a session is active and show remaining time.
+.TP
+.B list
+List available secret names (not values).
+.TP
+.B run \fR[\fI--scope NAME1,NAME2\fR] \fIcommand\fR
+Run a command with $env[NAME] substitution. Secret values are injected
+as environment variables and output is sanitized to replace any leaked
+values with [REDACTED:NAME].
+.RS
+.TP
+.B --scope \fINAME1,NAME2\fR
+Only allow substitution of specified secrets (principle of least privilege).
+.RE
+.TP
+.B logout
+Clear the session and lock secrets. Aliases: lock, clear.
+.TP
+.B check-hello
+Check if Windows Hello is available. Alias: check.
+.TP
+.B help
+Show help message. Aliases: --help, -h.
+.SH SECRET INJECTION
+Commands run via 'scrt run' can use \fB$env[NAME]\fR syntax to inject secrets.
+The actual values are NEVER exposed to the command line or process list.
+.PP
+.RS
+.nf
+# Inject all available secrets
+scrt run curl -H "Authorization: Bearer $env[API_KEY]" https://api.example.com
+
+# Inject only specific secrets (recommended)
+scrt run --scope API_KEY,DB_URL -- node deploy.js
+.fi
+.RE
+.PP
+The secret value is substituted in memory and the output is sanitized
+to replace any leaked values with [REDACTED:NAME].
+.SH SECURITY MODEL
+.IP \(bu 2
+Secrets exist only in daemon memory after unlock
+.IP \(bu 2
+Windows Hello biometric required to unlock
+.IP \(bu 2
+Automatic session expiry (configurable TTL)
+.IP \(bu 2
+Output sanitization prevents secret leakage
+.IP \(bu 2
+Socket permissions restrict access to current user (0600)
+.IP \(bu 2
+Use --scope to limit secret exposure per command
+.IP \(bu 2
+Audit logging records all secret access
+.SH FILES
+.TP
+.I ~/.scrt/secrets.enc
+Encrypted secrets file (AES-256-CBC)
+.TP
+.I ~/.scrt/audit.log
+JSON Lines audit log of all operations
+.TP
+.I ~/.scrt/remote-config.json
+Remote session configuration (disabled by default)
+.TP
+.I $XDG_RUNTIME_DIR/scrt.sock
+Unix socket for daemon communication
+.SH ENVIRONMENT
+.TP
+.B XDG_RUNTIME_DIR
+Directory for the Unix socket. Falls back to /tmp/scrt-$UID.sock if not set.
+.SH EXIT STATUS
+.TP
+.B 0
+Success
+.TP
+.B 1
+Error (daemon not running, authentication failed, etc.)
+.TP
+.B >1
+Exit code from the executed command (for 'scrt run')
+.SH EXAMPLES
+.PP
+Authenticate and check status:
+.RS
+.nf
+$ scrt unlock
+Authenticating with Windows Hello...
+Unlocked 5 secret(s).
+
+$ scrt status
+Session active. Expires in 119 minutes.
+.fi
+.RE
+.PP
+Run a command with secrets:
+.RS
+.nf
+$ scrt run curl -H "Authorization: Bearer $env[API_KEY]" https://api.example.com
+{"result": "success", "token": "[REDACTED:API_KEY]"}
+.fi
+.RE
+.PP
+Run with scoped secrets:
+.RS
+.nf
+$ scrt run --scope DEPLOY_KEY -- ./deploy.sh
+Deployment complete.
+.fi
+.RE
+.SH SEE ALSO
+.BR systemctl (1),
+.BR pass (1),
+.BR gpg (1)
+.SH BUGS
+Report bugs at https://github.com/VestedJosh/Scrt/issues
+.SH AUTHOR
+Written by the Scrt team.

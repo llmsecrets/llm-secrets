@@ -99,7 +99,7 @@ export const WalletTools: React.FC = () => {
               <span className="badge">{result.network}</span>
             </div>
             <p className="info-text">
-              🔐 Private key securely stored in Windows Credential Manager
+              Private key securely stored in system keychain
             </p>
           </div>
         )}
@@ -107,7 +107,7 @@ export const WalletTools: React.FC = () => {
         <div className="info-section">
           <h3>Security Notes:</h3>
           <ul>
-            <li>Private keys are stored in your system keychain (Windows Credential Manager)</li>
+            <li>Private keys are stored in your system keychain</li>
             <li>Keys never appear in the UI or logs</li>
             <li>Backup your keys using a secure method</li>
             <li>Test with Sepolia before using Mainnet</li>
@@ -118,7 +118,7 @@ export const WalletTools: React.FC = () => {
       <div className="card">
         <h2>Your Wallets</h2>
         <p className="info-text">
-          Wallets from wallet-tools registry. Private keys stored securely in Windows Credential Manager via psst.
+          Wallets from registry. Private keys stored securely in your system keychain.
         </p>
         {registryWallets.length === 0 ? (
           <p>No wallets found in registry.</p>

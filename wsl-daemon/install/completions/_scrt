@@ -1,0 +1,54 @@
+#compdef scrt
+# Zsh completion for scrt
+# Install: copy to a directory in $fpath (e.g., ~/.zsh/completions/)
+
+_scrt() {
+    local -a commands
+    commands=(
+        'unlock:Authenticate with Windows Hello and load secrets'
+        'status:Check if session is active'
+        'list:List available secret names'
+        'run:Run command with $env[NAME] substitution'
+        'logout:Clear session and lock secrets'
+        'lock:Clear session and lock secrets (alias)'
+        'clear:Clear session and lock secrets (alias)'
+        'check-hello:Check if Windows Hello is available'
+        'check:Check if Windows Hello is available (alias)'
+        'help:Show help message'
+    )
+
+    _arguments -C \
+        '1: :->command' \
+        '*: :->args'
+
+    case $state in
+        command)
+            _describe -t commands 'scrt command' commands
+            ;;
+        args)
+            case $words[2] in
+                unlock)
+                    _arguments \
+                        '1:TTL in seconds:(1800 3600 7200 14400 28800)'
+                    ;;
+                run)
+                    _arguments \
+                        '--scope[Limit available secrets]:secrets:_scrt_secrets' \
+                        '*:command:_command_names -e'
+                    ;;
+                *)
+                    ;;
+            esac
+            ;;
+    esac
+}
+
+_scrt_secrets() {
+    local -a secrets
+    secrets=(${(f)"$(scrt list 2>/dev/null)"})
+    if [[ -n "$secrets" ]]; then
+        _values -s ',' 'secrets' $secrets
+    fi
+}
+
+_scrt "$@"
