@@ -1,66 +1,45 @@
 {
-<<<<<<< Updated upstream
   "name": "llm-secrets",
   "productName": "LLM Secrets",
-  "version": "3.0.12",
-  "description": "Secure secrets management for LLM agents with Windows Hello protection",
-=======
-  "name": "simple-secret",
-  "productName": "Simple Secret",
-  "version": "3.0.14",
-  "description": "Simplified secrets management with Windows Hello - choose Simple or Advanced security",
->>>>>>> Stashed changes
+  "version": "3.1.0-windows",
+  "versionNote": "Added scrt tx CLI for Ethereum transactions",
+  "description": "Secure secrets management for LLM agents with Windows Hello / Touch ID protection",
   "main": ".webpack/main",
   "private": true,
   "scripts": {
     "start": "electron-forge start",
     "package": "electron-forge package",
     "make": "electron-forge make",
+    "make:mac": "electron-forge make --platform darwin",
+    "make:win": "electron-forge make --platform win32",
+    "build:touchid": "cd macos-helper && bash build.sh",
+    "build:cli": "esbuild src/cli/tx.ts --bundle --platform=node --outfile=dist/cli/tx.js",
+    "cli": "node dist/cli/tx.js",
+    "cli:tx": "node dist/cli/tx.js tx",
     "publish": "electron-forge publish",
     "lint": "eslint --ext .ts,.tsx .",
     "test": "jest",
-    "build": "electron-builder",
-    "build:prod": "bun run package && bun run scripts/build-obfuscated.ts",
-    "build:prod:parallel": "bun run package && bun run scripts/build-obfuscated-parallel.ts",
-    "build:prod:fast": "bun run package && bun run scripts/build-obfuscated-parallel.ts --fast",
-    "make:prod": "bun run build:prod && bun run make",
-    "make:prod:parallel": "bun run build:prod:parallel && bun run make",
-    "make:prod:fast": "bun run build:prod:fast && bun run make"
+    "build": "electron-builder"
   },
-  "keywords": [
-    "encryption",
-    "secrets",
-    "env",
-    "security",
-    "windows-hello"
-  ],
+  "keywords": ["encryption", "secrets", "env", "security", "windows-hello"],
   "author": {
     "name": "VestedJosh",
     "email": "josh@lendvest.io"
   },
-  "license": "AGPL-3.0",
+  "license": "GPL-3.0",
   "build": {
     "appId": "com.vestedjosh.llm-secrets",
     "productName": "LLM Secrets",
     "win": {
-      "target": [
-        "nsis",
-        "msi"
-      ],
+      "target": ["nsis", "msi"],
       "icon": "assets/icon.ico"
     },
     "mac": {
-      "target": [
-        "dmg",
-        "zip"
-      ],
+      "target": ["dmg", "zip"],
       "icon": "assets/icon.icns"
     },
     "linux": {
-      "target": [
-        "AppImage",
-        "deb"
-      ],
+      "target": ["AppImage", "deb"],
       "icon": "assets/icon.png"
     }
   },
@@ -85,15 +64,11 @@
     "eslint": "^8.57.1",
     "eslint-plugin-import": "^2.32.0",
     "fork-ts-checker-webpack-plugin": "^7.3.0",
-    "javascript-obfuscator": "^4.1.1",
     "jest": "^30.2.0",
     "node-loader": "^2.1.0",
-    "puppeteer": "^24.35.0",
     "style-loader": "^3.3.4",
-    "to-ico": "^1.1.5",
     "ts-jest": "^29.4.6",
     "ts-loader": "^9.5.4",
-    "ts-node": "^10.9.2",
     "typescript": "~4.5.4"
   },
   "dependencies": {
