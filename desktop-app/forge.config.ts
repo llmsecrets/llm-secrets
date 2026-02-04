@@ -11,16 +11,24 @@ import { FuseV1Options, FuseVersion } from '@electron/fuses';
 import { mainConfig } from './webpack.main.config';
 import { rendererConfig } from './webpack.renderer.config';
 
+// Only sign if APPLE_ID and APPLE_TEAM_ID are set (requires Apple Developer account)
+const shouldSign = process.platform === 'darwin' && process.env.APPLE_ID && process.env.APPLE_TEAM_ID;
+
 const config: ForgeConfig = {
   packagerConfig: {
     asar: true,
     icon: './assets/icon',
     extraResource: ['./resources'],
-    osxSign: process.platform === 'darwin' ? {
+    osxSign: shouldSign ? {
       optionsForFile: () => ({
         entitlements: './entitlements.mac.plist',
         hardenedRuntime: true,
       }),
+    } : undefined,
+    osxNotarize: shouldSign ? {
+      appleId: process.env.APPLE_ID!,
+      appleIdPassword: process.env.APPLE_ID_PASSWORD!,
+      teamId: process.env.APPLE_TEAM_ID!,
     } : undefined,
   },
   rebuildConfig: {},
