@@ -52,25 +52,32 @@ export const SetupWizard: React.FC<SetupWizardProps> = ({ onComplete }) => {
     }
   }, [step, securityMode]);
 
-  // Simple mode vault creation (Windows Hello only)
+  // Simple mode vault creation (Touch ID on macOS, Windows Hello on Windows)
   const handleCreateSimpleVault = async () => {
     console.log('[SetupWizard] Starting createSimpleVault...');
     try {
       console.log('[SetupWizard] Calling window.electronAPI.createSimpleVault()...');
       const result = await window.electronAPI.createSimpleVault();
       console.log('[SetupWizard] createSimpleVault result:', result);
-      if (result.success && result.masterKey) {
-        setMasterKey(result.masterKey);
-        setStep('backup_key');
+      if (result.success) {
+        // On macOS, masterKey is stored in Keychain (not returned)
+        // On Windows, masterKey is returned for backup
+        if (result.masterKey) {
+          setMasterKey(result.masterKey);
+          setStep('backup_key');
+        } else {
+          // macOS: skip backup key step, go directly to add secrets
+          setStep('add_secrets');
+        }
       } else {
         console.error('[SetupWizard] createSimpleVault failed:', result.error);
         setError(result.error || 'Failed to create vault');
-        setStep('choose_mode');
+        setStep('welcome');
       }
     } catch (err) {
       console.error('[SetupWizard] createSimpleVault exception:', err);
       setError(`Error: ${(err as Error).message}`);
-      setStep('choose_mode');
+      setStep('welcome');
     }
   };
 
@@ -84,8 +91,7 @@ export const SetupWizard: React.FC<SetupWizardProps> = ({ onComplete }) => {
       <div className="checklist">
         <p>You'll need to:</p>
         <ul>
-          <li>Choose your security level</li>
-          <li>Authenticate with Windows Hello</li>
+          <li>Authenticate with Touch ID or Windows Hello</li>
           <li>Save a backup key (keep it somewhere safe)</li>
           <li>Add your first secrets</li>
         </ul>
@@ -98,7 +104,7 @@ export const SetupWizard: React.FC<SetupWizardProps> = ({ onComplete }) => {
         </p>
       </div>
 
-      <button className="btn-primary" onClick={() => setStep('license')}>
+      <button className="btn-primary" onClick={() => setStep('creating_vault')}>
         Get Started
       </button>
 
@@ -521,9 +527,7 @@ export const SetupWizard: React.FC<SetupWizardProps> = ({ onComplete }) => {
         Continue
       </button>
 
-      <div className="step-indicator">
-        {securityMode === 'simple' ? 'Step 3 of 5' : 'Step 3 of 6'}
-      </div>
+      <div className="step-indicator">Step 1 of 3</div>
     </div>
   );
 
@@ -602,34 +606,26 @@ GITHUB_PAT=
       {error && <div className="error-message">{error}</div>}
 
       <div className="button-group">
-        <button className="btn-primary" onClick={handleEncryptSecrets}>
+        <button
+          className="btn-primary"
+          onClick={handleEncryptSecrets}
+          disabled={!secrets.trim() || parseSecretNames(secrets).length === 0}
+        >
           Encrypt & Continue
         </button>
-        <button
-          className="btn-secondary"
-          onClick={async () => {
-            // Install Claude Code slash commands even when skipping secrets
-            await window.electronAPI.installClaudeCommands();
-            // Simple mode: skip session settings (defaults to 2 hours)
-            if (securityMode === 'simple') {
-              await window.electronAPI.saveSessionSettings('2hours');
-              setStep('complete');
-            } else {
-              setStep('session_settings');
-            }
-          }}
-        >
-          Skip for Now
-        </button>
       </div>
+
+      {(!secrets.trim() || parseSecretNames(secrets).length === 0) && (
+        <div className="validation-hint">
+          Please enter at least one secret in KEY=value format to continue.
+        </div>
+      )}
 
       <div className="tip-box">
         <strong>Tip:</strong> You can add more secrets anytime in the Secrets Manager.
       </div>
 
-      <div className="step-indicator">
-        {securityMode === 'simple' ? 'Step 5 of 6' : 'Step 4 of 6'}
-      </div>
+      <div className="step-indicator">Step 2 of 3</div>
     </div>
   );
 
@@ -763,9 +759,7 @@ GITHUB_PAT=
         You can add, edit, or remove secrets anytime in the Secrets Manager.
       </p>
 
-      <div className="step-indicator">
-        {securityMode === 'simple' ? 'Step 5 of 5' : 'Step 6 of 6'}
-      </div>
+      <div className="step-indicator">Step 3 of 3</div>
     </div>
   );
 

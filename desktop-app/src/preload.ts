@@ -133,6 +133,9 @@ export interface ElectronAPI {
   activateLicense: (licenseKey: string, email: string) => Promise<{success: boolean, error?: string}>;
   checkLicense: () => Promise<{success: boolean, isLicensed?: boolean, email?: string, activatedAt?: string, error?: string}>;
   removeLicense: () => Promise<{success: boolean, error?: string}>;
+  licenseActivate: (licenseKey: string, email: string) => Promise<{success: boolean, error?: string}>;
+  licenseActivateKeyOnly: (licenseKey: string) => Promise<{success: boolean, error?: string}>;
+  licenseOpenPurchase: () => Promise<{success: boolean, error?: string}>;
 
   // WSL Daemon (when running in WSL2 environment)
   wslCheckDaemon: () => Promise<{success: boolean, available?: boolean, error?: string}>;
@@ -224,6 +227,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   activateLicense: (licenseKey: string, email: string) => ipcRenderer.invoke('activate-license', licenseKey, email),
   checkLicense: () => ipcRenderer.invoke('check-license'),
   removeLicense: () => ipcRenderer.invoke('remove-license'),
+  licenseActivate: (licenseKey: string, email: string) => ipcRenderer.invoke('activate-license', licenseKey, email),
+  licenseActivateKeyOnly: (licenseKey: string) => ipcRenderer.invoke('activate-license', licenseKey, ''),
+  licenseOpenPurchase: () => Promise.resolve({ success: true }),
 
   // WSL Daemon (when running in WSL2 environment)
   wslCheckDaemon: () => ipcRenderer.invoke('wsl-check-daemon'),

@@ -910,3 +910,21 @@
 [data-theme="dark"] .purchase-link p {
   color: #94a3b8;
 }
+
+/* Validation Hint */
+.validation-hint {
+  margin-top: 12px;
+  padding: 10px 14px;
+  background: rgba(234, 179, 8, 0.1);
+  border: 1px solid rgba(234, 179, 8, 0.3);
+  border-radius: 8px;
+  font-size: 0.875rem;
+  color: #a16207;
+  text-align: center;
+}
+
+[data-theme="dark"] .validation-hint {
+  background: rgba(234, 179, 8, 0.15);
+  border-color: rgba(234, 179, 8, 0.3);
+  color: #fbbf24;
+}
