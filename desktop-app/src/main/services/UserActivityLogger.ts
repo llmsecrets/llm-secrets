@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { app } from 'electron';
 
 export interface ActivityLogEntry {
   timestamp: string;
@@ -23,8 +24,8 @@ export class UserActivityLogger {
   private logFilePath: string;
 
   constructor() {
-    // Store logs in test-sandbox/logs or a logs folder
-    const baseDir = path.join(__dirname, '..', '..', '..');
+    // Store logs in userData directory (portable across machines)
+    const baseDir = app.getPath('userData');
     this.LOG_DIR = path.join(baseDir, 'logs', 'user-activity');
 
     // Ensure log directory exists
