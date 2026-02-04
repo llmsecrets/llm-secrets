@@ -1,6 +1,6 @@
 # LLM Secrets Software License
 
-**Copyright (C) 2025 LLM Secrets**
+**Copyright (C) 2025-2026 LLM Secrets**
 
 **Product Name:** LLM Secrets - Windows Hello Encryption System
 **Website:** https://llmsecrets.com
@@ -8,81 +8,30 @@
 
 ---
 
-## Dual License Structure
+## License
 
-LLM Secrets uses a **dual-license model** to balance trust and sustainability:
+LLM Secrets is licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0)**.
 
-| Component | License | You Can |
-|-----------|---------|---------|
-| **Encryption Core** | Apache 2.0 | Use, modify, sell, anything |
-| **CLI Tool (`scrt`)** | Apache 2.0 | Use, modify, sell, anything |
-| **Desktop App** | Source Available | View, audit, build for personal use |
-| **Desktop App** | **Paid License** | Commercial use, official builds |
+This applies to ALL components:
+- Encryption Core (`crypto-core/`)
+- CLI Tool (`scrt`, `cli/`)
+- Desktop Application (`desktop-app/`)
+- WSL2 Daemon (`wsl2-daemon/`)
+- NPM Package (`npm-package/`)
 
-### Why This Model?
-
-Security software should be auditable. You can read every line of cryptographic
-code to verify there's no backdoors. The paid license for the desktop app
-supports continued development.
-
----
-
-## Apache 2.0 Components (Fully Open Source)
-
-The following components are licensed under the **Apache License 2.0**:
-
-- `crypto-core/` - EnvCrypto.psm1, WindowsHelloAuth.cs
-- `cli/` - scrt CLI tool and all commands
-- `npm-package/` - CLI distribution package
-
-**You may:**
+### You May:
 - Use for any purpose (personal, commercial)
 - Modify and create derivative works
-- Distribute and sublicense
-- Use in proprietary software
+- Distribute copies
+- Access and audit all source code
 
-**Requirements:**
-- Include copyright notice and Apache 2.0 license
+### Requirements:
+- Include copyright notice and AGPL-3.0 license
+- Disclose source code of modifications
 - State changes if you modify the code
-- Include NOTICE file if present
+- **Network use clause:** If you run a modified version as a network service, you must make the source code available to users of that service
 
-See `LICENSE-APACHE` for full terms.
-
----
-
-## Source Available Components (Desktop App)
-
-The **Desktop Application** (desktop-app/) is licensed under a
-**Source Available License** based on Elastic License 2.0.
-
-**You may:**
-- View and audit the source code for security
-- Build from source for personal, non-commercial use
-- Report security vulnerabilities
-- Learn from the codebase
-
-**You may NOT:**
-- Redistribute the software without permission
-- Sell or sublicense the software
-- Remove or bypass the license key system
-- Provide as a hosted/managed service
-- Use LLM Secrets branding without permission
-
-See `LICENSE` for full terms.
-
----
-
-## Purchasing a License
-
-To use LLM Secrets commercially or obtain redistribution rights:
-
-**Website:** https://llmsecrets.com
-**Email:** support@llmsecrets.com
-
-A license includes:
-- Official builds with automatic updates
-- Commercial use rights
-- Priority support
+See `LICENSE` in the repository root for full AGPL-3.0 terms.
 
 ---
 
@@ -157,5 +106,5 @@ You may not use this software if you are:
 
 ---
 
-**Last Updated:** January 2025
-**License Version:** 2.0
+**Last Updated:** February 2026
+**License Version:** 3.0 (AGPL-3.0)
