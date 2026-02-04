@@ -1,7 +1,7 @@
 {
   "name": "llm-secrets",
   "productName": "LLM Secrets",
-  "version": "3.1.0-windows",
+  "version": "3.1.0",
   "versionNote": "Added scrt tx CLI for Ethereum transactions",
   "description": "Secure secrets management for LLM agents with Windows Hello / Touch ID protection",
   "main": ".webpack/main",
