@@ -7,13 +7,13 @@ This document provides SHA256 checksums and verification status for all official
 | Platform | Version | SHA256 | Verification |
 |----------|---------|--------|--------------|
 | **Windows** | 3.0.20 | `6f22b341229f37a0bd95eb948696468b15fdce1035e548ea4c150f3b32b19913` | Source Verified |
-| **macOS** | 3.1.0 | `710cf88233d3856fb415e5bfab1df7ce263af8ad6a6b1b88b11e8bda7d2d2272` | Source Available |
+| **macOS** | 3.1.0 | `dd1c6726ea159fba38c8cf78a22012709f06c69a7d29e19f33029b8b789f1550` | Source Available |
 | **WSL/Linux** | 0.3.0 | `fe572ef7b300412255040cda6576e5f518289c41b405f41077173cdf430bed95` | Reproducible Build |
 
 ## Download URLs
 
 - **Windows:** https://sign.lendvest.io/downloads/LLM-Secrets-3.0.20-Setup.exe
-- **macOS:** https://sign.lendvest.io/downloads/LLM-Secrets-3.1.0-macOS-arm64.zip
+- **macOS:** https://sign.lendvest.io/downloads/LLM-Secrets-macOS-v3.1.0.dmg
 - **WSL/Linux:** https://sign.lendvest.io/downloads/scrt-wsl-0.3.0.tar.gz
 
 ## Verification Commands
@@ -23,7 +23,7 @@ This document provides SHA256 checksums and verification status for all official
 (Get-FileHash .\LLM-Secrets-3.0.20-Setup.exe -Algorithm SHA256).Hash
 
 # macOS/Linux
-sha256sum LLM-Secrets-3.1.0-macOS-arm64.zip
+sha256sum LLM-Secrets-macOS-v3.1.0.dmg
 sha256sum scrt-wsl-0.3.0.tar.gz
 ```
 
@@ -128,7 +128,7 @@ Users can audit the source code to verify the security implementation.
 
 | Component | SHA256 |
 |-----------|--------|
-| LLM-Secrets-3.1.0-macOS-arm64.zip | `710cf88233d3856fb415e5bfab1df7ce263af8ad6a6b1b88b11e8bda7d2d2272` |
+| LLM-Secrets-macOS-v3.1.0.dmg | `dd1c6726ea159fba38c8cf78a22012709f06c69a7d29e19f33029b8b789f1550` |
 
 ### Source Location
 
