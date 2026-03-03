@@ -1,0 +1,3 @@
+# Force LF line endings on shell scripts (prevents CRLF breakage on WSL)
+*.sh text eol=lf
+wsl-daemon/bin/scrt text eol=lf

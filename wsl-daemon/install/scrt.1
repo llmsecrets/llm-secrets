@@ -1,4 +1,4 @@
-.TH SCRT 1 "January 2026" "scrt 0.1.0" "User Commands"
+.TH SCRT 1 "March 2026" "scrt 0.3.0" "User Commands"
 .SH NAME
 scrt \- WSL2 secure secret injector for AI agents
 .SH SYNOPSIS
@@ -26,15 +26,20 @@ Check if a session is active and show remaining time.
 .B list
 List available secret names (not values).
 .TP
-.B run \fR[\fI--scope NAME1,NAME2\fR] \fIcommand\fR
+.B run \fIcommand\fR
 Run a command with $env[NAME] substitution. Secret values are injected
 as environment variables and output is sanitized to replace any leaked
 values with [REDACTED:NAME].
-.RS
 .TP
-.B --scope \fINAME1,NAME2\fR
-Only allow substitution of specified secrets (principle of least privilege).
-.RE
+.B add \fIKEY=value\fR [\fIKEY2=value2\fR ...]
+Add one or more secrets to the active session.
+.TP
+.B view
+View all secrets in a GUI dialog (zenity). Uses a two-phase challenge/confirm
+flow for security. Requires zenity to be installed.
+.TP
+.B extend \fR[\fIttl\fR]
+Reset the session timer without re-authenticating. Optionally set a new TTL.
 .TP
 .B logout
 Clear the session and lock secrets. Aliases: lock, clear.
@@ -42,19 +47,28 @@ Clear the session and lock secrets. Aliases: lock, clear.
 .B check-hello
 Check if Windows Hello is available. Alias: check.
 .TP
+.B migrate \fIold-master-key\fR
+Migrate secrets from an old master key to the current one.
+.TP
+.B backup-key
+Display the current master key. Save this securely for disaster recovery.
+.TP
 .B help
-Show help message. Aliases: --help, -h.
+Show help message. Aliases: \-\-help, \-h.
+.TP
+.B \-v\fR, \fB\-\-version
+Show version number.
 .SH SECRET INJECTION
 Commands run via 'scrt run' can use \fB$env[NAME]\fR syntax to inject secrets.
 The actual values are NEVER exposed to the command line or process list.
 .PP
 .RS
 .nf
-# Inject all available secrets
+# Inject secrets into a command
 scrt run curl -H "Authorization: Bearer $env[API_KEY]" https://api.example.com
 
-# Inject only specific secrets (recommended)
-scrt run --scope API_KEY,DB_URL -- node deploy.js
+# The output is sanitized
+{"result": "success", "token": "[REDACTED:API_KEY]"}
 .fi
 .RE
 .PP
@@ -72,26 +86,21 @@ Output sanitization prevents secret leakage
 .IP \(bu 2
 Socket permissions restrict access to current user (0600)
 .IP \(bu 2
-Use --scope to limit secret exposure per command
-.IP \(bu 2
-Audit logging records all secret access
+GUI view (scrt view) is invisible to AI agents
 .SH FILES
 .TP
-.I ~/.scrt/secrets.enc
-Encrypted secrets file (AES-256-CBC)
-.TP
-.I ~/.scrt/audit.log
-JSON Lines audit log of all operations
-.TP
-.I ~/.scrt/remote-config.json
-Remote session configuration (disabled by default)
-.TP
 .I $XDG_RUNTIME_DIR/scrt.sock
-Unix socket for daemon communication
+Unix socket for daemon communication.
+.TP
+.I ~/.config/scrt/
+Configuration directory.
+.TP
+.I ~/.local/share/scrt/
+Data directory.
 .SH ENVIRONMENT
 .TP
 .B XDG_RUNTIME_DIR
-Directory for the Unix socket. Falls back to /tmp/scrt-$UID.sock if not set.
+Directory for the Unix socket. Falls back to /tmp if not set.
 .SH EXIT STATUS
 .TP
 .B 0
@@ -108,11 +117,10 @@ Authenticate and check status:
 .RS
 .nf
 $ scrt unlock
-Authenticating with Windows Hello...
 Unlocked 5 secret(s).
 
 $ scrt status
-Session active. Expires in 119 minutes.
+Session active. Expires in 119m 58s.
 .fi
 .RE
 .PP
@@ -124,18 +132,22 @@ $ scrt run curl -H "Authorization: Bearer $env[API_KEY]" https://api.example.com
 .fi
 .RE
 .PP
-Run with scoped secrets:
+Add and list secrets:
 .RS
 .nf
-$ scrt run --scope DEPLOY_KEY -- ./deploy.sh
-Deployment complete.
+$ scrt add API_KEY=sk-123 DB_URL=postgres://localhost/mydb
+Added 2 secret(s).
+
+$ scrt list
+API_KEY
+DB_URL
 .fi
 .RE
 .SH SEE ALSO
 .BR systemctl (1),
-.BR pass (1),
-.BR gpg (1)
+.BR socat (1),
+.BR zenity (1)
 .SH BUGS
-Report bugs at https://github.com/VestedJosh/Scrt/issues
+Report bugs at https://github.com/llmsecrets/llm-secrets/issues
 .SH AUTHOR
-Written by the Scrt team.
+Written by the LLM Secrets team.

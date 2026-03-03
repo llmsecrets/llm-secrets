@@ -1,5 +1,6 @@
 #!/bin/bash
-# wsl2-daemon/install/install.sh
+# scrt WSL daemon installer
+# Supports both pre-built tarballs and source builds
 
 set -e
 
@@ -53,7 +54,7 @@ check_dependencies() {
 
     # Check optional but recommended
     if ! command -v zenity &>/dev/null; then
-        echo "NOTE: zenity is not installed. GUI features (view, edit, add, gui) will not work."
+        echo "NOTE: zenity is not installed. GUI features (scrt view) will not work."
         echo "  Install: $(pkg_install_hint zenity)"
         echo ""
     fi
@@ -63,20 +64,40 @@ check_dependencies
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$SCRIPT_DIR/.."
-DAEMON_BIN="$PROJECT_DIR/target/release/scrt-daemon"
-CLIENT_BIN="$PROJECT_DIR/scrt-client/target/release/scrt-client"
+
+# Auto-detect binary locations: tarball (bin/) or source build (target/release/)
+find_binary() {
+    local name="$1"
+    if [ -f "$PROJECT_DIR/target/release/$name" ]; then
+        echo "$PROJECT_DIR/target/release/$name"
+    elif [ -f "$PROJECT_DIR/bin/$name" ]; then
+        echo "$PROJECT_DIR/bin/$name"
+    else
+        echo ""
+    fi
+}
+
+DAEMON_BIN=$(find_binary "scrt-daemon")
+CLIENT_BIN=$(find_binary "scrt-client")
 CLI_SCRIPT="$PROJECT_DIR/bin/scrt"
-HELLO_BRIDGE="$PROJECT_DIR/../scrt-linux/lib/hello-bridge.ps1"
 
-# Check if binaries exist
-if [ ! -f "$DAEMON_BIN" ]; then
-    echo "ERROR: Daemon binary not found. Run 'cargo build --release' first."
-    exit 1
-fi
-
-if [ ! -f "$CLIENT_BIN" ]; then
-    echo "ERROR: Client binary not found. Run 'cargo build --release' in scrt-client first."
-    exit 1
+# If binaries not found, try building from source
+if [ -z "$DAEMON_BIN" ] || [ -z "$CLIENT_BIN" ]; then
+    if command -v cargo &>/dev/null; then
+        echo "Pre-built binaries not found. Building from source..."
+        echo ""
+        (cd "$PROJECT_DIR" && cargo build --release)
+        (cd "$PROJECT_DIR/scrt-client" && cargo build --release)
+        DAEMON_BIN="$PROJECT_DIR/target/release/scrt-daemon"
+        CLIENT_BIN="$PROJECT_DIR/scrt-client/target/release/scrt-client"
+    else
+        echo "ERROR: Binaries not found and Rust is not installed."
+        echo ""
+        echo "Options:"
+        echo "  1. Download the pre-built release tarball"
+        echo "  2. Install Rust (https://rustup.rs) and run 'make build'"
+        exit 1
+    fi
 fi
 
 if [ ! -f "$CLI_SCRIPT" ]; then
@@ -88,14 +109,10 @@ fi
 mkdir -p ~/.local/bin
 mkdir -p ~/.config/systemd/user
 mkdir -p ~/.config/scrt
-mkdir -p /usr/local/share/scrt 2>/dev/null || mkdir -p ~/.local/share/scrt
+mkdir -p ~/.local/share/scrt
 
-# Determine share directory (prefer system-wide, fallback to user)
-SHARE_DIR="/usr/local/share/scrt"
-if [ ! -w "$(dirname "$SHARE_DIR")" ]; then
-    SHARE_DIR="$HOME/.local/share/scrt"
-    mkdir -p "$SHARE_DIR"
-fi
+# Stop existing daemon if running (ignore errors)
+systemctl --user stop scrt-daemon 2>/dev/null || true
 
 # Copy binaries
 cp "$DAEMON_BIN" ~/.local/bin/scrt-daemon
@@ -104,6 +121,9 @@ cp "$CLI_SCRIPT" ~/.local/bin/scrt
 chmod +x ~/.local/bin/scrt-daemon
 chmod +x ~/.local/bin/scrt-client
 chmod +x ~/.local/bin/scrt
+
+# Ensure LF line endings on shell script (in case of Windows checkout)
+sed -i 's/\r$//' ~/.local/bin/scrt
 
 # Install man page
 MAN_DIR="$HOME/.local/share/man/man1"
@@ -122,14 +142,6 @@ echo "Installed bash completion to $BASH_COMP_DIR/scrt"
 mkdir -p "$ZSH_COMP_DIR"
 cp "$SCRIPT_DIR/completions/_scrt" "$ZSH_COMP_DIR/"
 echo "Installed zsh completion to $ZSH_COMP_DIR/_scrt"
-
-# Copy hello-bridge.ps1 if it exists
-if [ -f "$HELLO_BRIDGE" ]; then
-    cp "$HELLO_BRIDGE" "$SHARE_DIR/hello-bridge.ps1"
-    echo "Installed hello-bridge.ps1 to $SHARE_DIR"
-else
-    echo "WARNING: hello-bridge.ps1 not found. Windows Hello integration may not work."
-fi
 
 # Install systemd service
 cp "$SCRIPT_DIR/scrt-daemon.service" ~/.config/systemd/user/

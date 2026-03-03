@@ -1,0 +1,315 @@
+#!/bin/bash
+# scrt - WSL2 secure secret injector CLI
+# Wrapper for scrt-daemon via Unix socket
+
+set -euo pipefail
+
+VERSION="0.3.0"
+SOCKET="${XDG_RUNTIME_DIR:-/tmp}/scrt.sock"
+CLIENT="scrt-client"
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+CYAN='\033[0;36m'
+NC='\033[0m'
+
+send_request() {
+    local json="$1"
+    if command -v socat &>/dev/null; then
+        echo "$json" | socat - UNIX-CONNECT:"$SOCKET" 2>/dev/null
+    elif command -v nc &>/dev/null; then
+        echo "$json" | nc -U -w 2 "$SOCKET" 2>/dev/null
+    else
+        echo '{"success":false,"error":"No socket client (socat or nc) found"}'
+    fi
+}
+
+cmd_unlock() {
+    local ttl="${1:-7200}"
+    local response
+    response=$(send_request "{\"method\":\"unlock\",\"params\":{\"ttl\":$ttl}}")
+
+    local success=$(echo "$response" | jq -r '.success // false')
+    if [ "$success" = "true" ]; then
+        local count=$(echo "$response" | jq -r '.data.count // 0')
+        echo -e "${GREEN}Unlocked ${count} secret(s).${NC}"
+    else
+        local error=$(echo "$response" | jq -r '.error // "Unknown error"')
+        echo -e "${RED}Unlock failed: ${error}${NC}" >&2
+        return 1
+    fi
+}
+
+cmd_status() {
+    local response
+    response=$(send_request '{"method":"status"}')
+
+    local active=$(echo "$response" | jq -r '.data.active // false')
+    local remaining=$(echo "$response" | jq -r '.data.remaining // 0')
+
+    if [ "$active" = "true" ]; then
+        if [ "$remaining" -lt 0 ] 2>/dev/null; then
+            echo -e "${GREEN}Session active (no expiry)${NC}"
+        else
+            local mins=$((remaining / 60))
+            local secs=$((remaining % 60))
+            echo -e "${GREEN}Session active. Expires in ${mins}m ${secs}s.${NC}"
+        fi
+    else
+        echo -e "${YELLOW}Session inactive. Run 'scrt unlock' to authenticate.${NC}"
+    fi
+}
+
+cmd_list() {
+    local response
+    response=$(send_request '{"method":"list"}')
+
+    local success=$(echo "$response" | jq -r '.success // false')
+    if [ "$success" = "true" ]; then
+        echo "$response" | jq -r '.data.names[]' 2>/dev/null
+    else
+        local error=$(echo "$response" | jq -r '.error // "Unknown error"')
+        echo -e "${RED}${error}${NC}" >&2
+        return 1
+    fi
+}
+
+cmd_run() {
+    if [ $# -eq 0 ]; then
+        echo -e "${RED}Usage: scrt run <command>${NC}" >&2
+        return 1
+    fi
+
+    # Use scrt-client for run (handles exit codes and streaming properly)
+    "$CLIENT" run "$@"
+}
+
+cmd_logout() {
+    local response
+    response=$(send_request '{"method":"clear"}')
+
+    local success=$(echo "$response" | jq -r '.success // false')
+    if [ "$success" = "true" ]; then
+        echo -e "${GREEN}Session cleared.${NC}"
+    else
+        echo -e "${RED}Failed to clear session.${NC}" >&2
+        return 1
+    fi
+}
+
+cmd_check_hello() {
+    local response
+    response=$(send_request '{"method":"check_hello"}')
+
+    local available=$(echo "$response" | jq -r '.data.available // false')
+    if [ "$available" = "true" ]; then
+        echo -e "${GREEN}Windows Hello is available.${NC}"
+    else
+        echo -e "${YELLOW}Windows Hello is not available.${NC}"
+    fi
+}
+
+cmd_extend() {
+    local ttl="${1:-}"
+    local json
+    if [ -n "$ttl" ]; then
+        json="{\"method\":\"extend\",\"params\":{\"ttl\":$ttl}}"
+    else
+        json='{"method":"extend"}'
+    fi
+
+    local response
+    response=$(send_request "$json")
+
+    local success=$(echo "$response" | jq -r '.success // false')
+    if [ "$success" = "true" ]; then
+        local remaining=$(echo "$response" | jq -r '.data.remaining // 0')
+        local mins=$((remaining / 60))
+        echo -e "${GREEN}Session extended. ${mins} minutes remaining.${NC}"
+    else
+        local error=$(echo "$response" | jq -r '.error // "Unknown error"')
+        echo -e "${RED}${error}${NC}" >&2
+        return 1
+    fi
+}
+
+cmd_view() {
+    if ! command -v zenity &>/dev/null; then
+        echo -e "${RED}zenity required for GUI view. Install: sudo apt install zenity${NC}" >&2
+        return 1
+    fi
+
+    # Phase 1: Request challenge
+    local response
+    response=$(send_request '{"method":"reveal_all"}')
+
+    local success=$(echo "$response" | jq -r '.success // false')
+    if [ "$success" != "true" ]; then
+        local error=$(echo "$response" | jq -r '.error // "Unknown error"')
+        echo -e "${RED}${error}${NC}" >&2
+        return 1
+    fi
+
+    local challenge=$(echo "$response" | jq -r '.data.challenge')
+    local code=$(echo "$response" | jq -r '.data.code')
+
+    # Show code in zenity info dialog
+    zenity --info --title="Scrt Verification" \
+        --text="<b>Verification Code:</b>\n\n<span font='24'>$code</span>\n\nEnter this code in the next dialog to reveal secrets." \
+        --width=300 2>/dev/null &
+
+    # Get code from user
+    local user_code
+    user_code=$(zenity --entry --title="Scrt Verification" \
+        --text="Enter the verification code:" \
+        --width=300 2>/dev/null) || return 1
+
+    # Phase 2: Confirm with code
+    response=$(send_request "{\"method\":\"reveal_all_confirm\",\"params\":{\"challenge\":\"$challenge\",\"code\":\"$user_code\"}}")
+
+    success=$(echo "$response" | jq -r '.success // false')
+    if [ "$success" = "true" ]; then
+        local secrets=$(echo "$response" | jq -r '.data.secrets | to_entries[] | "\(.key)=\(.value)"')
+        zenity --text-info --title="Scrt - All Secrets" \
+            --width=800 --height=600 \
+            --font="monospace" \
+            <<< "$secrets" 2>/dev/null
+    else
+        local error=$(echo "$response" | jq -r '.error // "Unknown error"')
+        zenity --error --text="$error" 2>/dev/null
+        return 1
+    fi
+}
+
+cmd_add() {
+    if [ $# -eq 0 ]; then
+        echo -e "${RED}Usage: scrt add KEY=value [KEY2=value2 ...]${NC}" >&2
+        return 1
+    fi
+
+    # Build secrets JSON
+    local json_secrets="{"
+    local first=true
+    for pair in "$@"; do
+        local key="${pair%%=*}"
+        local value="${pair#*=}"
+        if [ "$first" = true ]; then
+            first=false
+        else
+            json_secrets+=","
+        fi
+        # Escape value for JSON
+        value=$(printf '%s' "$value" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()),end="")')
+        json_secrets+="\"$key\":$value"
+    done
+    json_secrets+="}"
+
+    local response
+    response=$(send_request "{\"method\":\"add_secrets\",\"params\":{\"secrets\":$json_secrets}}")
+
+    local success=$(echo "$response" | jq -r '.success // false')
+    if [ "$success" = "true" ]; then
+        local count=$(echo "$response" | jq -r '.data.count // 0')
+        echo -e "${GREEN}Added ${count} secret(s).${NC}"
+    else
+        local error=$(echo "$response" | jq -r '.error // "Unknown error"')
+        echo -e "${RED}${error}${NC}" >&2
+        return 1
+    fi
+}
+
+cmd_migrate() {
+    local old_key="${1:-}"
+    if [ -z "$old_key" ]; then
+        echo -e "${RED}Usage: scrt migrate <old-master-key-base64>${NC}" >&2
+        return 1
+    fi
+
+    local response
+    response=$(send_request "{\"method\":\"migrate\",\"params\":{\"old_key\":\"$old_key\"}}")
+
+    local success=$(echo "$response" | jq -r '.success // false')
+    if [ "$success" = "true" ]; then
+        local count=$(echo "$response" | jq -r '.data.count // 0')
+        echo -e "${GREEN}Migrated ${count} secret(s) to new master key.${NC}"
+    else
+        local error=$(echo "$response" | jq -r '.error // "Unknown error"')
+        echo -e "${RED}Migration failed: ${error}${NC}" >&2
+        return 1
+    fi
+}
+
+cmd_backup_key() {
+    local response
+    response=$(send_request '{"method":"backup_key"}')
+
+    local success=$(echo "$response" | jq -r '.success // false')
+    if [ "$success" = "true" ]; then
+        local key=$(echo "$response" | jq -r '.data.key')
+        echo -e "${CYAN}Master Key (save this securely!):${NC}"
+        echo "$key"
+    else
+        local error=$(echo "$response" | jq -r '.error // "Unknown error"')
+        echo -e "${RED}${error}${NC}" >&2
+        return 1
+    fi
+}
+
+cmd_help() {
+    echo "scrt v${VERSION} - WSL2 secure secret injector"
+    echo ""
+    echo "USAGE:"
+    echo "  scrt <command> [options]"
+    echo ""
+    echo "COMMANDS:"
+    echo "  unlock [ttl]      Authenticate with Windows Hello (default: 7200s)"
+    echo "  status            Check session status"
+    echo "  list              List secret names"
+    echo "  run <command>     Run command with \$env[NAME] substitution"
+    echo "  add KEY=val ...   Add secrets to active session"
+    echo "  view              View all secrets in GUI (zenity)"
+    echo "  extend [ttl]      Reset session timer"
+    echo "  logout            Clear session (aliases: lock, clear)"
+    echo "  check-hello       Check Windows Hello availability"
+    echo "  migrate <key>     Migrate secrets from old master key"
+    echo "  backup-key        Show current master key"
+    echo "  help              Show this help"
+    echo ""
+    echo "EXAMPLES:"
+    echo "  scrt unlock                    # Authenticate (2 hour session)"
+    echo "  scrt unlock 28800              # 8 hour session"
+    echo "  scrt list                      # List secret names"
+    echo "  scrt run 'curl -H \"Auth: Bearer \$env[API_KEY]\" https://api.example.com'"
+    echo "  scrt add API_KEY=sk-123        # Add a secret"
+    echo "  scrt view                      # View secrets in GUI"
+}
+
+# Check daemon is running
+if [ ! -S "$SOCKET" ]; then
+    echo -e "${RED}Daemon not running. Start with: systemctl --user start scrt-daemon${NC}" >&2
+    exit 1
+fi
+
+# Route command
+case "${1:-help}" in
+    unlock)       shift; cmd_unlock "$@" ;;
+    status)       cmd_status ;;
+    list)         cmd_list ;;
+    run)          shift; cmd_run "$@" ;;
+    logout|lock|clear) cmd_logout ;;
+    check-hello|check) cmd_check_hello ;;
+    extend)       shift; cmd_extend "$@" ;;
+    view)         cmd_view ;;
+    add)          shift; cmd_add "$@" ;;
+    migrate)      shift; cmd_migrate "$@" ;;
+    backup-key)   cmd_backup_key ;;
+    help|--help|-h) cmd_help ;;
+    -v|--version) echo "scrt v${VERSION}" ;;
+    *)
+        echo -e "${RED}Unknown command: $1${NC}" >&2
+        cmd_help
+        exit 1
+        ;;
+esac
