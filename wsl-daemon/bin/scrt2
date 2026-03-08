@@ -702,19 +702,29 @@ cmd_add() {
             return 1
         fi
 
-        local input
-        input=$(echo "# Paste your secrets below, one per line
+        # Write placeholder to temp file (avoids pipe which breaks clipboard in WSL2)
+        local tmpfile
+        tmpfile=$(mktemp /tmp/scrt2-add-XXXXXX.txt)
+        cat > "$tmpfile" << 'PLACEHOLDER'
+# Paste your secrets below, one per line
 # Format: KEY=value
 # Lines starting with # are ignored
 # Example:
 # API_KEY=sk-abc123
-# DB_PASSWORD=mysecretpassword" | zenity --text-info --editable \
+# DB_PASSWORD=mysecretpassword
+PLACEHOLDER
+
+        local input
+        input=$(zenity --text-info --editable \
             --title="Scrt2 - Add Secrets" \
             --width=700 --height=500 \
-            --font="monospace" 2>/dev/null)
+            --font="monospace" \
+            --filename="$tmpfile" 2>/dev/null)
+        local zenity_rc=$?
+        rm -f "$tmpfile"
 
         # User clicked Cancel or closed
-        if [ $? -ne 0 ] || [ -z "$input" ]; then
+        if [ $zenity_rc -ne 0 ] || [ -z "$input" ]; then
             echo -e "${YELLOW}Cancelled.${NC}"
             return 0
         fi
