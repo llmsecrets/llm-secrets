@@ -600,7 +600,7 @@ cmd_view() {
         # Show code and entry in a single dialog
         local user_code
         user_code=$(zenity --entry --title="Scrt2 - Verification" \
-            --text="<b>Your verification code:</b>\n\n<span font='48' weight='bold'>  $code  </span>\n\n\nType the code above to reveal secrets:" \
+            --text="Your verification code:\n\n          $code\n\nType the code above to reveal secrets:" \
             --width=400 2>/dev/null) || return 1
 
         # Phase 2: Confirm with code
