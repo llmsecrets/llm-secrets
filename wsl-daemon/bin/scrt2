@@ -597,16 +597,11 @@ cmd_view() {
         local challenge=$(echo "$response" | jq -r '.data.challenge')
         local code=$(echo "$response" | jq -r '.data.code')
 
-        # Show code in zenity info dialog
-        zenity --info --title="Scrt2 Verification" \
-            --text="<b>Verification Code:</b>\n\n<span font='24'>$code</span>\n\nEnter this code in the next dialog to reveal secrets." \
-            --width=300 2>/dev/null &
-
-        # Get code from user
+        # Show code and entry in a single dialog
         local user_code
-        user_code=$(zenity --entry --title="Scrt2 Verification" \
-            --text="Enter the verification code:" \
-            --width=300 2>/dev/null) || return 1
+        user_code=$(zenity --entry --title="Scrt2 - Verification" \
+            --text="<b>Your verification code:</b>\n\n<span font='48' weight='bold'>  $code  </span>\n\n\nType the code above to reveal secrets:" \
+            --width=400 2>/dev/null) || return 1
 
         # Phase 2: Confirm with code
         response=$(send_request "{\"method\":\"reveal_all_confirm\",\"params\":{\"challenge\":\"$challenge\",\"code\":\"$user_code\"}}")
@@ -729,38 +724,62 @@ PLACEHOLDER
             return 0
         fi
 
-        # Parse KEY=value lines, skip comments and blanks
-        local json_secrets="{"
-        local first=true
-        local count=0
-        while IFS= read -r line; do
-            # Skip empty lines and comments
-            [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
-            # Must contain =
-            if [[ "$line" != *"="* ]]; then
-                echo -e "${YELLOW}Skipping invalid line (no '=' found): ${line}${NC}" >&2
-                continue
-            fi
-            local key="${line%%=*}"
-            local value="${line#*=}"
-            # Trim whitespace from key
-            key=$(echo "$key" | xargs)
-            [ -z "$key" ] && continue
+        # Parse lines with Python for robust KEY=value extraction and JSON building
+        local json_secrets
+        json_secrets=$(printf '%s' "$input" | python3 -c '
+import sys, json, re
 
-            if [ "$first" = true ]; then
-                first=false
-            else
-                json_secrets+=","
-            fi
-            # Escape value for JSON
-            value=$(printf '%s' "$value" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()),end="")')
-            json_secrets+="\"$key\":$value"
-            ((count++))
-        done <<< "$input"
-        json_secrets+="}"
+lines = sys.stdin.read().splitlines()
+secrets = {}
+skipped = []
+for line in lines:
+    stripped = line.strip()
+    # Skip empty lines and comments
+    if not stripped or stripped.startswith("#"):
+        continue
+    # Try KEY=value first
+    if "=" in stripped:
+        key, value = stripped.split("=", 1)
+        key = key.strip()
+        if key:
+            secrets[key] = value
+            continue
+    # Try KEY: value (colon separator)
+    if ":" in stripped:
+        key, value = stripped.split(":", 1)
+        key = key.strip()
+        value = value.strip()
+        if key and re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", key):
+            secrets[key] = value
+            continue
+    skipped.append(stripped)
 
-        if [ "$count" -eq 0 ]; then
+# Print skipped lines to stderr
+for s in skipped:
+    print(f"SKIPPED:{s}", file=sys.stderr)
+
+# Print count to stderr
+print(f"COUNT:{len(secrets)}", file=sys.stderr)
+
+# Print JSON to stdout
+print(json.dumps(secrets), end="")
+' 2>/tmp/scrt2-add-parse.log)
+
+        # Show skipped lines
+        while IFS= read -r logline; do
+            if [[ "$logline" == SKIPPED:* ]]; then
+                echo -e "${YELLOW}Skipping: ${logline#SKIPPED:}${NC}" >&2
+            fi
+        done < /tmp/scrt2-add-parse.log
+
+        # Get count
+        local count
+        count=$(grep '^COUNT:' /tmp/scrt2-add-parse.log | head -1 | cut -d: -f2)
+        rm -f /tmp/scrt2-add-parse.log
+
+        if [ "${count:-0}" -eq 0 ]; then
             echo -e "${YELLOW}No valid KEY=value lines found.${NC}"
+            echo -e "${YELLOW}Expected format: KEY=value (one per line)${NC}"
             return 0
         fi
 
