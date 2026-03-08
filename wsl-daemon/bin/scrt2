@@ -695,10 +695,81 @@ cmd_2fa_reenable() {
 
 cmd_add() {
     if [ $# -eq 0 ]; then
-        echo -e "${RED}Usage: scrt2 add KEY=value [KEY2=value2 ...]${NC}" >&2
-        return 1
+        # ── GUI mode: zenity notepad ──
+        if ! command -v zenity &>/dev/null; then
+            echo -e "${RED}Usage: scrt2 add KEY=value [KEY2=value2 ...]${NC}" >&2
+            echo -e "${YELLOW}Or install zenity for GUI mode: sudo apt install zenity${NC}" >&2
+            return 1
+        fi
+
+        local input
+        input=$(echo "# Paste your secrets below, one per line
+# Format: KEY=value
+# Lines starting with # are ignored
+# Example:
+# API_KEY=sk-abc123
+# DB_PASSWORD=mysecretpassword" | zenity --text-info --editable \
+            --title="Scrt2 - Add Secrets" \
+            --width=700 --height=500 \
+            --font="monospace" 2>/dev/null)
+
+        # User clicked Cancel or closed
+        if [ $? -ne 0 ] || [ -z "$input" ]; then
+            echo -e "${YELLOW}Cancelled.${NC}"
+            return 0
+        fi
+
+        # Parse KEY=value lines, skip comments and blanks
+        local json_secrets="{"
+        local first=true
+        local count=0
+        while IFS= read -r line; do
+            # Skip empty lines and comments
+            [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
+            # Must contain =
+            if [[ "$line" != *"="* ]]; then
+                echo -e "${YELLOW}Skipping invalid line (no '=' found): ${line}${NC}" >&2
+                continue
+            fi
+            local key="${line%%=*}"
+            local value="${line#*=}"
+            # Trim whitespace from key
+            key=$(echo "$key" | xargs)
+            [ -z "$key" ] && continue
+
+            if [ "$first" = true ]; then
+                first=false
+            else
+                json_secrets+=","
+            fi
+            # Escape value for JSON
+            value=$(printf '%s' "$value" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()),end="")')
+            json_secrets+="\"$key\":$value"
+            ((count++))
+        done <<< "$input"
+        json_secrets+="}"
+
+        if [ "$count" -eq 0 ]; then
+            echo -e "${YELLOW}No valid KEY=value lines found.${NC}"
+            return 0
+        fi
+
+        # Send to daemon
+        local response
+        response=$(send_request "{\"method\":\"add_secrets\",\"params\":{\"secrets\":$json_secrets}}")
+        local success=$(echo "$response" | jq -r '.success // false')
+        if [ "$success" = "true" ]; then
+            local added=$(echo "$response" | jq -r '.data.count // 0')
+            echo -e "${GREEN}Added ${added} secret(s).${NC}"
+        else
+            local error=$(echo "$response" | jq -r '.error // "Unknown error"')
+            echo -e "${RED}${error}${NC}" >&2
+            return 1
+        fi
+        return 0
     fi
 
+    # ── CLI mode (existing, unchanged) ──
     # Build secrets JSON
     local json_secrets="{"
     local first=true
@@ -782,7 +853,7 @@ cmd_help() {
     echo "  status            Check session status"
     echo "  list              List secret names"
     echo "  run <command>     Run command with \$env[NAME] substitution"
-    echo "  add KEY=val ...   Add secrets to active session"
+    echo "  add [KEY=val ...]  Add secrets (GUI notepad if no args, or KEY=value on command line)"
     echo "  view [code]       View secrets (2FA prompt or pass code; GUI challenge if 2FA disabled)"
     echo "  2fa-disable [code] Disable 2FA for view (falls back to GUI challenge)"
     echo "  2fa-reenable [code] Re-enable 2FA for view (uses existing TOTP secret)"
