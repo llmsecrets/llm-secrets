@@ -233,7 +233,7 @@ flush_setup_traces() {
 }
 
 cmd_setup_2fa() {
-    local mode="${1:-manual}"
+    local mode="${1:-agent}"
 
     # Ensure config directory exists
     mkdir -p "$(dirname "$TOTP_SECRET_FILE")"
@@ -300,6 +300,9 @@ cmd_setup_2fa() {
 
             flush_setup_traces
             echo -e "${CYAN}Audit logs and shell history flushed.${NC}"
+            echo ""
+            echo -e "${YELLOW}Tip: 2FA is mainly useful for remote access (e.g. Claude Code from your phone).${NC}"
+            echo -e "${YELLOW}For local use, you can disable it:  scrt2 2fa-disable${NC}"
             ;;
 
         qr)
@@ -404,6 +407,9 @@ cmd_setup_2fa() {
 
             flush_setup_traces
             echo -e "${CYAN}Audit logs and shell history flushed.${NC}"
+            echo ""
+            echo -e "${YELLOW}Tip: 2FA is mainly useful for remote access (e.g. Claude Code from your phone).${NC}"
+            echo -e "${YELLOW}For local use, you can disable it:  scrt2 2fa-disable${NC}"
             ;;
 
         agent)
@@ -493,6 +499,9 @@ cmd_setup_2fa() {
             # Step 6: Flush traces
             flush_setup_traces
             echo -e "${CYAN}Audit logs and shell history flushed.${NC}"
+            echo ""
+            echo -e "${YELLOW}Tip: 2FA is mainly useful for remote access (e.g. Claude Code from your phone).${NC}"
+            echo -e "${YELLOW}For local use, you can disable it:  scrt2 2fa-disable${NC}"
             ;;
 
         *)
@@ -876,9 +885,10 @@ cmd_help() {
     echo ""
     echo "COMMANDS:"
     echo "  daemon            Start the scrt2 daemon (foreground)"
-    echo "  setup-2fa         Configure 2FA via QR code in GUI (zenity)"
-    echo "  setup-2fa manual  Configure 2FA via hidden CLI input (no GUI)"
-    echo "  setup-2fa agent   Configure 2FA for AI agent use (non-interactive)"
+    echo "  setup-2fa         Configure 2FA (defaults to agent mode)"
+    echo "  setup-2fa agent   Non-interactive setup with QR in terminal (default)"
+    echo "  setup-2fa qr      Setup with QR in GUI (zenity)"
+    echo "  setup-2fa manual  Setup via hidden CLI input (no GUI)"
     echo "  unlock [ttl] [code] Authenticate with TOTP (default: 72000s / 20h)"
     echo "  status            Check session status"
     echo "  list              List secret names"
@@ -896,9 +906,9 @@ cmd_help() {
     echo ""
     echo "GETTING STARTED:"
     echo "  scrt2 daemon &                  # Start daemon in background"
-    echo "  scrt2 setup-2fa                 # Set up 2FA with QR code (GUI)"
+    echo "  scrt2 setup-2fa                 # Set up 2FA (agent mode, QR in terminal)"
+    echo "  scrt2 setup-2fa qr              # Set up 2FA with QR in GUI (zenity)"
     echo "  scrt2 setup-2fa manual          # Set up 2FA via hidden CLI input"
-    echo "  scrt2 setup-2fa agent           # Set up 2FA for AI agent (non-interactive)"
     echo "  scrt2 unlock                    # Authenticate (2 hour session)"
     echo ""
     echo "EXAMPLES:"
