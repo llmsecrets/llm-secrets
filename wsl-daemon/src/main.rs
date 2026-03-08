@@ -8,6 +8,7 @@ mod handlers;
 mod sanitize;
 mod subprocess;
 mod dpapi;
+mod totp;
 mod audit;
 mod remote;
 
@@ -85,10 +86,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 fn get_socket_path() -> PathBuf {
     if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
-        PathBuf::from(runtime_dir).join("scrt.sock")
+        PathBuf::from(runtime_dir).join("scrt2.sock")
     } else {
         // Fallback for systems without XDG_RUNTIME_DIR
         let uid = unsafe { libc::getuid() };
-        PathBuf::from(format!("/tmp/scrt-{}.sock", uid))
+        PathBuf::from(format!("/tmp/scrt2-{}.sock", uid))
     }
 }

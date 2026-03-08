@@ -5,6 +5,7 @@ use tokio::net::UnixStream;
 
 use crate::audit::{self, AuditEvent, EventType, EventResult};
 use crate::dpapi;
+use crate::totp;
 use crate::protocol::{Request, Response, ResponseData};
 use crate::session::SharedSession;
 use crate::subprocess::run_with_secrets;
@@ -81,11 +82,19 @@ async fn handle_request(line: &str) -> Response {
         Request::RevealAll => handle_reveal_all().await,
         Request::RevealAllConfirm { challenge, code } => handle_reveal_all_confirm(challenge, code).await,
         Request::AddSecrets { secrets } => handle_add_secrets(secrets).await,
-        Request::Unlock { ttl } => handle_unlock(ttl).await,
-        Request::CheckHello => handle_check_hello().await,
+        Request::Unlock { ttl, totp_code } => handle_unlock(ttl, totp_code).await,
+        Request::CheckTotp => handle_check_totp().await,
+        Request::SetupTotp => handle_setup_totp().await,
+        Request::VerifyTotpSetup { code } => handle_verify_totp_setup(code).await,
         Request::Extend { ttl } => handle_extend(ttl).await,
         Request::BackupKey => handle_backup_key().await,
         Request::Migrate { old_key } => handle_migrate(old_key).await,
+        Request::InitializeKeys => handle_initialize_keys().await,
+        Request::RevealAllTotp { totp_code } => handle_reveal_all_totp(totp_code).await,
+        Request::RevealTotp { name, totp_code } => handle_reveal_totp(name, totp_code).await,
+        Request::CheckTfaState => handle_check_tfa_state().await,
+        Request::DisableTfa { totp_code } => handle_disable_tfa(totp_code).await,
+        Request::EnableTfa { totp_code } => handle_enable_tfa(totp_code).await,
     }
 }
 
@@ -344,15 +353,21 @@ async fn handle_reveal_all_confirm(challenge: String, code: String) -> Response 
     }
 }
 
-/// Unlock secrets via Windows Hello
-/// This triggers biometric authentication, decrypts secrets, and loads them into memory
-async fn handle_unlock(ttl: Option<u64>) -> Response {
+/// Unlock secrets — uses TOTP + DPAPI when 2FA enabled, DPAPI-only when 2FA disabled
+async fn handle_unlock(ttl: Option<u64>, totp_code: String) -> Response {
     let ttl = ttl.unwrap_or(7200);  // Default 2 hours
+    let tfa_enabled = totp::is_tfa_enabled();
 
     audit::log_simple(EventType::AuthAttempt, EventResult::Pending);
 
-    // Run the unlock flow (Windows Hello -> DPAPI -> decrypt)
-    let (secrets, master_key) = match dpapi::unlock_secrets().await {
+    // TOTP when 2FA enabled, DPAPI-only when 2FA disabled
+    let (secrets, master_key) = match if tfa_enabled {
+        tracing::info!("Unlock via TOTP + DPAPI");
+        dpapi::unlock_secrets(&totp_code).await
+    } else {
+        tracing::info!("Unlock via DPAPI only (2FA disabled)");
+        dpapi::unlock_secrets_dpapi_only().await
+    } {
         Ok(s) => s,
         Err(e) => {
             audit::log_event(
@@ -417,10 +432,42 @@ async fn handle_extend(ttl: Option<u64>) -> Response {
     }
 }
 
-/// Check if Windows Hello is available
-async fn handle_check_hello() -> Response {
-    match dpapi::check_hello_available() {
-        Ok(available) => Response::ok_with_data(ResponseData::HelloAvailable { available }),
+/// Check if TOTP is configured
+async fn handle_check_totp() -> Response {
+    let configured = totp::is_totp_configured();
+    Response::ok_with_data(ResponseData::TotpConfigured { configured })
+}
+
+/// Generate a new TOTP secret for initial setup
+/// Secret is saved to disk only — not returned in the response to avoid leaking
+/// through socket/logs. The CLI reads it directly from ~/.scrt2/totp.secret.
+async fn handle_setup_totp() -> Response {
+    match totp::generate_totp_secret() {
+        Ok((secret, _otpauth_uri)) => {
+            if let Err(e) = totp::save_totp_secret(&secret) {
+                return Response::error(e);
+            }
+            // Return only success — secret and URI stay on disk, never cross the socket
+            Response::ok()
+        }
+        Err(e) => Response::error(e),
+    }
+}
+
+/// Verify a TOTP code during setup to confirm the user has configured their authenticator
+async fn handle_verify_totp_setup(code: String) -> Response {
+    match totp::verify_totp_code(&code) {
+        Ok(true) => {
+            audit::log_simple(EventType::AuthSuccess, EventResult::Success);
+            Response::ok()
+        }
+        Ok(false) => {
+            audit::log_event(
+                AuditEvent::new(EventType::AuthFailure, EventResult::Failure)
+                    .with_error("Invalid TOTP code during setup verification")
+            );
+            Response::error("Invalid TOTP code. Check your authenticator app and try again.")
+        }
         Err(e) => Response::error(e),
     }
 }
@@ -496,4 +543,236 @@ async fn handle_migrate(old_key: String) -> Response {
             Response::error(format!("Migration failed: {}. Check that the old key is correct.", e))
         }
     }
+}
+
+/// Reveal all secrets using TOTP authentication (bypasses GUI challenge)
+async fn handle_reveal_all_totp(totp_code: String) -> Response {
+    let session = get_session().read().await;
+
+    if !session.is_active() {
+        audit::log_event(
+            AuditEvent::new(EventType::TfaRevealAll, EventResult::Failure)
+                .with_error("No active session")
+        );
+        return Response::error("No active session - authenticate first");
+    }
+
+    // Verify TOTP
+    match totp::verify_totp_code(&totp_code) {
+        Ok(true) => {}
+        Ok(false) => {
+            audit::log_event(
+                AuditEvent::new(EventType::TfaRevealAll, EventResult::Failure)
+                    .with_error("Invalid TOTP code")
+            );
+            return Response::error("Invalid 2FA code");
+        }
+        Err(e) => {
+            audit::log_event(
+                AuditEvent::new(EventType::TfaRevealAll, EventResult::Failure)
+                    .with_error(&e)
+            );
+            return Response::error(e);
+        }
+    }
+
+    match session.secrets() {
+        Some(secrets) => {
+            let count = secrets.len();
+            audit::log_event(
+                AuditEvent::new(EventType::TfaRevealAll, EventResult::Success)
+                    .with_secret_count(count)
+            );
+            Response::ok_with_data(ResponseData::RevealAll { secrets: secrets.clone() })
+        }
+        None => {
+            audit::log_event(
+                AuditEvent::new(EventType::TfaRevealAll, EventResult::Failure)
+                    .with_error("No secrets loaded")
+            );
+            Response::error("No secrets loaded")
+        }
+    }
+}
+
+/// Reveal a single secret using TOTP authentication (bypasses GUI challenge)
+async fn handle_reveal_totp(name: String, totp_code: String) -> Response {
+    let session = get_session().read().await;
+
+    if !session.is_active() {
+        audit::log_event(
+            AuditEvent::new(EventType::TfaReveal, EventResult::Failure)
+                .with_secret_name(&name)
+                .with_error("No active session")
+        );
+        return Response::error("No active session - authenticate first");
+    }
+
+    // Verify TOTP
+    match totp::verify_totp_code(&totp_code) {
+        Ok(true) => {}
+        Ok(false) => {
+            audit::log_event(
+                AuditEvent::new(EventType::TfaReveal, EventResult::Failure)
+                    .with_secret_name(&name)
+                    .with_error("Invalid TOTP code")
+            );
+            return Response::error("Invalid 2FA code");
+        }
+        Err(e) => {
+            audit::log_event(
+                AuditEvent::new(EventType::TfaReveal, EventResult::Failure)
+                    .with_secret_name(&name)
+                    .with_error(&e)
+            );
+            return Response::error(e);
+        }
+    }
+
+    match session.secrets() {
+        Some(secrets) => {
+            match secrets.get(&name) {
+                Some(value) => {
+                    audit::log_event(
+                        AuditEvent::new(EventType::TfaReveal, EventResult::Success)
+                            .with_secret_name(&name)
+                    );
+                    Response::ok_with_data(ResponseData::Reveal { value: value.clone() })
+                }
+                None => {
+                    audit::log_event(
+                        AuditEvent::new(EventType::TfaReveal, EventResult::Failure)
+                            .with_secret_name(&name)
+                            .with_error("Secret not found")
+                    );
+                    Response::error(format!("Secret '{}' not found", name))
+                }
+            }
+        }
+        None => {
+            audit::log_event(
+                AuditEvent::new(EventType::TfaReveal, EventResult::Failure)
+                    .with_secret_name(&name)
+                    .with_error("No secrets loaded")
+            );
+            Response::error("No secrets loaded")
+        }
+    }
+}
+
+/// Check 2FA state (configured + enabled/disabled)
+async fn handle_check_tfa_state() -> Response {
+    let configured = totp::is_totp_configured();
+    let enabled = totp::is_tfa_enabled();
+    Response::ok_with_data(ResponseData::TfaState { configured, enabled })
+}
+
+/// Disable 2FA for reveal operations (requires valid TOTP to prove authenticator access)
+async fn handle_disable_tfa(totp_code: String) -> Response {
+    // Must prove authenticator access to disable
+    match totp::verify_totp_code(&totp_code) {
+        Ok(true) => {}
+        Ok(false) => {
+            audit::log_event(
+                AuditEvent::new(EventType::TfaDisabled, EventResult::Failure)
+                    .with_error("Invalid TOTP code")
+            );
+            return Response::error("Invalid 2FA code");
+        }
+        Err(e) => {
+            audit::log_event(
+                AuditEvent::new(EventType::TfaDisabled, EventResult::Failure)
+                    .with_error(&e)
+            );
+            return Response::error(e);
+        }
+    }
+
+    match totp::set_tfa_state(false) {
+        Ok(()) => {
+            audit::log_event(
+                AuditEvent::new(EventType::TfaDisabled, EventResult::Success)
+            );
+            Response::ok()
+        }
+        Err(e) => {
+            audit::log_event(
+                AuditEvent::new(EventType::TfaDisabled, EventResult::Failure)
+                    .with_error(&e)
+            );
+            Response::error(e)
+        }
+    }
+}
+
+/// Re-enable 2FA for reveal operations (requires valid TOTP)
+async fn handle_enable_tfa(totp_code: String) -> Response {
+    // Must prove authenticator access to re-enable
+    match totp::verify_totp_code(&totp_code) {
+        Ok(true) => {}
+        Ok(false) => {
+            audit::log_event(
+                AuditEvent::new(EventType::TfaEnabled, EventResult::Failure)
+                    .with_error("Invalid TOTP code")
+            );
+            return Response::error("Invalid 2FA code");
+        }
+        Err(e) => {
+            audit::log_event(
+                AuditEvent::new(EventType::TfaEnabled, EventResult::Failure)
+                    .with_error(&e)
+            );
+            return Response::error(e);
+        }
+    }
+
+    match totp::set_tfa_state(true) {
+        Ok(()) => {
+            audit::log_event(
+                AuditEvent::new(EventType::TfaEnabled, EventResult::Success)
+            );
+            Response::ok()
+        }
+        Err(e) => {
+            audit::log_event(
+                AuditEvent::new(EventType::TfaEnabled, EventResult::Failure)
+                    .with_error(&e)
+            );
+            Response::error(e)
+        }
+    }
+}
+
+/// Generate fresh encryption keys and reset the secret store
+/// Called during setup-2fa to ensure new auth = new keys = clean store
+async fn handle_initialize_keys() -> Response {
+    audit::log_event(
+        AuditEvent::new(EventType::KeysInitialized, EventResult::Pending)
+    );
+
+    // Step 1: Generate fresh DPAPI-encrypted master key
+    let master_key = match dpapi::generate_new_master_key() {
+        Ok(k) => k,
+        Err(e) => {
+            audit::log_event(
+                AuditEvent::new(EventType::KeysInitialized, EventResult::Failure)
+                    .with_error(&e)
+            );
+            return Response::error(format!("Key generation failed: {}", e));
+        }
+    };
+
+    // Step 2: Delete old env files and create fresh empty store
+    if let Err(e) = dpapi::reset_encrypted_env(&master_key) {
+        audit::log_event(
+            AuditEvent::new(EventType::KeysInitialized, EventResult::Failure)
+                .with_error(&e)
+        );
+        return Response::error(format!("Failed to reset encrypted env: {}", e));
+    }
+
+    audit::log_event(
+        AuditEvent::new(EventType::KeysInitialized, EventResult::Success)
+    );
+    Response::ok()
 }

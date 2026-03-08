@@ -1,0 +1,845 @@
+#!/bin/bash
+# scrt2 - WSL2 secure secret injector CLI (TOTP edition)
+# Wrapper for scrt2-daemon via Unix socket
+
+set -euo pipefail
+
+VERSION="0.4.0"
+SOCKET="${XDG_RUNTIME_DIR:-/tmp}/scrt2.sock"
+CLIENT="scrt2-client"
+TOTP_SECRET_FILE="$HOME/.scrt2/totp.secret"
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+CYAN='\033[0;36m'
+NC='\033[0m'
+
+send_request() {
+    local json="$1"
+    if command -v socat &>/dev/null; then
+        echo "$json" | socat - UNIX-CONNECT:"$SOCKET" 2>/dev/null
+    elif command -v nc &>/dev/null; then
+        echo "$json" | nc -U -w 2 "$SOCKET" 2>/dev/null
+    else
+        echo '{"success":false,"error":"No socket client (socat or nc) found"}'
+    fi
+}
+
+# Compute TOTP code from stored secret using Python3 stdlib
+compute_totp() {
+    if [ ! -f "$TOTP_SECRET_FILE" ]; then
+        echo -e "${RED}TOTP not configured. Run 'scrt2 setup-totp' first.${NC}" >&2
+        return 1
+    fi
+
+    local secret
+    secret=$(cat "$TOTP_SECRET_FILE")
+
+    python3 -c "
+import hmac, hashlib, struct, time, base64
+
+secret_b32 = '$secret'.strip()
+# Decode base32 secret (add padding if needed)
+padding = '=' * ((8 - len(secret_b32) % 8) % 8)
+key = base64.b32decode(secret_b32 + padding, casefold=True)
+
+# TOTP: current time step
+counter = int(time.time()) // 30
+msg = struct.pack('>Q', counter)
+
+# HMAC-SHA1
+h = hmac.new(key, msg, hashlib.sha1).digest()
+
+# Dynamic truncation
+offset = h[-1] & 0x0F
+code = struct.unpack('>I', h[offset:offset+4])[0] & 0x7FFFFFFF
+code = code % 10**6
+
+print(f'{code:06d}')
+"
+}
+
+cmd_unlock() {
+    local ttl="${1:-72000}"
+    local totp_code="${2:-}"
+
+    # Check 2FA state: TOTP when enabled, DPAPI-only when disabled
+    local tfa_response
+    tfa_response=$(send_request '{"method":"check_tfa_state"}')
+    local tfa_enabled=$(echo "$tfa_response" | jq -r '.data.enabled // false')
+
+    if [ "$tfa_enabled" = "true" ]; then
+        # 2FA enabled — require Google Auth code
+        if [ -z "$totp_code" ]; then
+            if command -v zenity &>/dev/null; then
+                totp_code=$(zenity --entry --title="Scrt2 - Unlock" \
+                    --text="Enter your Google Authenticator code:" \
+                    --width=300 2>/dev/null) || return 1
+            else
+                echo -n "Enter 2FA code: "
+                read -r totp_code
+            fi
+        fi
+    else
+        # 2FA disabled — GUI challenge to prove user presence, then DPAPI-only unlock
+        if ! command -v zenity &>/dev/null; then
+            echo -e "${RED}zenity required when 2FA is disabled. Install: sudo apt install zenity${NC}" >&2
+            echo -e "${YELLOW}Or re-enable 2FA: scrt2 2fa-reenable${NC}"
+            return 1
+        fi
+
+        local challenge_code=$(printf '%06d' $((RANDOM % 1000000)))
+        zenity --info --title="Scrt2 - Unlock Verification" \
+            --text="<b>Verification Code:</b>\n\n<span font='24'>$challenge_code</span>\n\nEnter this code in the next dialog to unlock." \
+            --width=300 2>/dev/null &
+
+        local user_code
+        user_code=$(zenity --entry --title="Scrt2 - Unlock Verification" \
+            --text="Enter the verification code:" \
+            --width=300 2>/dev/null) || return 1
+
+        if [ "$user_code" != "$challenge_code" ]; then
+            echo -e "${RED}Incorrect verification code.${NC}" >&2
+            return 1
+        fi
+
+        totp_code="_dpapi_only_"
+    fi
+
+    local response
+    response=$(send_request "{\"method\":\"unlock\",\"params\":{\"ttl\":$ttl,\"totp_code\":\"$totp_code\"}}")
+
+    local success=$(echo "$response" | jq -r '.success // false')
+    if [ "$success" = "true" ]; then
+        local count=$(echo "$response" | jq -r '.data.count // 0')
+        echo -e "${GREEN}Unlocked ${count} secret(s).${NC}"
+    else
+        local error=$(echo "$response" | jq -r '.error // "Unknown error"')
+        echo -e "${RED}Unlock failed: ${error}${NC}" >&2
+        return 1
+    fi
+}
+
+cmd_status() {
+    local response
+    response=$(send_request '{"method":"status"}')
+
+    local active=$(echo "$response" | jq -r '.data.active // false')
+    local remaining=$(echo "$response" | jq -r '.data.remaining // 0')
+
+    if [ "$active" = "true" ]; then
+        if [ "$remaining" -lt 0 ] 2>/dev/null; then
+            echo -e "${GREEN}Session active (no expiry)${NC}"
+        else
+            local mins=$((remaining / 60))
+            local secs=$((remaining % 60))
+            echo -e "${GREEN}Session active. Expires in ${mins}m ${secs}s.${NC}"
+        fi
+    else
+        echo -e "${YELLOW}Session inactive. Run 'scrt2 unlock' to authenticate.${NC}"
+    fi
+}
+
+cmd_list() {
+    local response
+    response=$(send_request '{"method":"list"}')
+
+    local success=$(echo "$response" | jq -r '.success // false')
+    if [ "$success" = "true" ]; then
+        echo "$response" | jq -r '.data.names[]' 2>/dev/null
+    else
+        local error=$(echo "$response" | jq -r '.error // "Unknown error"')
+        echo -e "${RED}${error}${NC}" >&2
+        return 1
+    fi
+}
+
+cmd_run() {
+    if [ $# -eq 0 ]; then
+        echo -e "${RED}Usage: scrt2 run <command>${NC}" >&2
+        return 1
+    fi
+
+    # Use scrt2-client for run (handles exit codes and streaming properly)
+    "$CLIENT" run "$@"
+}
+
+cmd_logout() {
+    local response
+    response=$(send_request '{"method":"clear"}')
+
+    local success=$(echo "$response" | jq -r '.success // false')
+    if [ "$success" = "true" ]; then
+        echo -e "${GREEN}Session cleared.${NC}"
+    else
+        echo -e "${RED}Failed to clear session.${NC}" >&2
+        return 1
+    fi
+}
+
+cmd_check_totp() {
+    local response
+    response=$(send_request '{"method":"check_totp"}')
+
+    local configured=$(echo "$response" | jq -r '.data.configured // false')
+    if [ "$configured" = "true" ]; then
+        echo -e "${GREEN}TOTP is configured.${NC}"
+    else
+        echo -e "${YELLOW}TOTP is not configured. Run 'scrt2 setup-totp' to set up.${NC}"
+    fi
+}
+
+flush_setup_traces() {
+    # 1. Flush audit logs
+    local audit_dir="$HOME/.scrt2/audit"
+    if [ -d "$audit_dir" ]; then
+        local today_log
+        today_log=$(ls -t "$audit_dir"/*.jsonl 2>/dev/null | head -1)
+        if [ -n "$today_log" ]; then
+            > "$today_log"
+        fi
+    fi
+
+    # 2. Scrub bash/zsh history
+    history -d "$(history 1 | awk '{print $1}')" 2>/dev/null || true
+    if [ -f "$HOME/.bash_history" ]; then
+        sed -i '/setup-2fa/d' "$HOME/.bash_history" 2>/dev/null || true
+    fi
+    if [ -f "$HOME/.zsh_history" ]; then
+        sed -i '/setup-2fa/d' "$HOME/.zsh_history" 2>/dev/null || true
+    fi
+
+    # 3. Clean up temp files
+    rm -f /tmp/scrt2-qr-* 2>/dev/null || true
+
+    # 4. Scrub Claude Code session transcripts (redact the exact TOTP seed)
+    if [ -f "$TOTP_SECRET_FILE" ]; then
+        local seed
+        seed=$(cat "$TOTP_SECRET_FILE" 2>/dev/null)
+        if [ -n "$seed" ] && [ ${#seed} -ge 16 ]; then
+            local claude_proj_dir="$HOME/.claude/projects"
+            if [ -d "$claude_proj_dir" ]; then
+                find "$claude_proj_dir" -name '*.jsonl' -mmin -120 2>/dev/null | while read -r transcript; do
+                    if grep -qF "$seed" "$transcript" 2>/dev/null; then
+                        sed -i "s/${seed}/[TOTP_REDACTED]/g" "$transcript" 2>/dev/null || true
+                    fi
+                done
+            fi
+            seed="[CLEARED]"
+        fi
+    fi
+}
+
+cmd_setup_2fa() {
+    local mode="${1:-manual}"
+
+    # Ensure config directory exists
+    mkdir -p "$(dirname "$TOTP_SECRET_FILE")"
+    chmod 700 "$(dirname "$TOTP_SECRET_FILE")"
+
+    case "$mode" in
+        manual)
+            # ── Manual entry: user pastes base32 secret directly ──
+            # Input is hidden (not echoed). Visible in process memory briefly
+            # but never in stdout. Flushed from logs/history after.
+            echo -e "${CYAN}Paste your TOTP base32 secret below (input is hidden):${NC}"
+            local secret
+            IFS= read -rs secret
+            echo ""
+
+            if [ -z "$secret" ]; then
+                echo -e "${RED}No secret entered.${NC}" >&2
+                return 1
+            fi
+
+            # Normalize: strip whitespace/dashes, uppercase
+            secret=$(echo "$secret" | tr -d ' -' | tr '[:lower:]' '[:upper:]')
+
+            # Write to disk
+            echo -n "$secret" > "$TOTP_SECRET_FILE"
+            chmod 600 "$TOTP_SECRET_FILE"
+            secret="[CLEARED]"
+
+            echo -e "${GREEN}Secret saved to $TOTP_SECRET_FILE${NC}"
+
+            # Verify
+            echo -n "Enter a 6-digit TOTP code from your authenticator to verify: "
+            read -r verify_code
+
+            local verify_response
+            verify_response=$(send_request "{\"method\":\"verify_totp_setup\",\"params\":{\"code\":\"$verify_code\"}}")
+
+            local verify_success=$(echo "$verify_response" | jq -r '.success // false')
+            if [ "$verify_success" = "true" ]; then
+                echo -e "${GREEN}2FA setup verified successfully!${NC}"
+            else
+                local error=$(echo "$verify_response" | jq -r '.error // "Unknown error"')
+                echo -e "${RED}Verification failed: ${error}${NC}" >&2
+                echo -e "${YELLOW}Secret saved. Re-run 'scrt2 setup-2fa' to retry verification.${NC}"
+                flush_setup_traces
+                return 1
+            fi
+
+            # Generate fresh encryption keys (new auth = new keys)
+            echo -e "${CYAN}Generating fresh encryption keys...${NC}"
+            local init_response
+            init_response=$(send_request '{"method":"initialize_keys"}')
+            local init_success=$(echo "$init_response" | jq -r '.success // false')
+            if [ "$init_success" = "true" ]; then
+                echo -e "${GREEN}Fresh master key generated and encrypted with DPAPI.${NC}"
+                echo -e "${GREEN}Empty secret store created.${NC}"
+                echo -e "${CYAN}Add secrets with: scrt2 add KEY=value${NC}"
+            else
+                local init_error=$(echo "$init_response" | jq -r '.error // "Unknown error"')
+                echo -e "${RED}Key generation failed: ${init_error}${NC}" >&2
+                flush_setup_traces
+                return 1
+            fi
+
+            flush_setup_traces
+            echo -e "${CYAN}Audit logs and shell history flushed.${NC}"
+            ;;
+
+        qr)
+            # ── QR mode: daemon generates secret, QR shown as text in zenity ──
+            if ! command -v zenity &>/dev/null; then
+                echo -e "${RED}zenity required for QR mode. Use 'scrt2 setup-2fa manual' instead.${NC}" >&2
+                return 1
+            fi
+            if ! command -v qrencode &>/dev/null; then
+                echo -e "${RED}qrencode required. Install: sudo apt install qrencode${NC}" >&2
+                echo -e "${YELLOW}Or use: scrt2 setup-2fa manual${NC}"
+                return 1
+            fi
+
+            # Ask daemon to generate and save secret to disk
+            local response
+            response=$(send_request '{"method":"setup_totp"}')
+
+            local success=$(echo "$response" | jq -r '.success // false')
+            if [ "$success" != "true" ]; then
+                local error=$(echo "$response" | jq -r '.error // "Unknown error"')
+                echo -e "${RED}Setup failed: ${error}${NC}" >&2
+                return 1
+            fi
+
+            if [ ! -f "$TOTP_SECRET_FILE" ]; then
+                echo -e "${RED}TOTP secret file not found.${NC}" >&2
+                return 1
+            fi
+
+            # Read from disk, build QR — secret only in bash vars + temp file
+            local secret otpauth_uri setup_ts acct_label
+            secret=$(cat "$TOTP_SECRET_FILE")
+            setup_ts=$(date '+%Y-%m-%d %H:%M')
+            acct_label="LLM Secrets: ${setup_ts}"
+            otpauth_uri="otpauth://totp/$(python3 -c "import urllib.parse; print(urllib.parse.quote('${acct_label}'))")?secret=${secret}&issuer=LLM%20Secrets&algorithm=SHA1&digits=6&period=30"
+
+            # Generate UTF8 QR text file and show in zenity --text-info
+            local qr_txt
+            qr_txt=$(mktemp /tmp/scrt2-qr-XXXXXX.txt)
+            {
+                echo "══════════════════════════════════════════"
+                echo "  Scan with Google Authenticator"
+                echo "  (maximize this window for full QR)"
+                echo "══════════════════════════════════════════"
+                echo ""
+                qrencode -t UTF8 "$otpauth_uri"
+                echo ""
+                echo "══════════════════════════════════════════"
+                echo "  Manual entry secret (base32):"
+                echo ""
+                echo "  $secret"
+                echo "══════════════════════════════════════════"
+            } > "$qr_txt"
+
+            zenity --text-info --title="Scrt2 — 2FA Setup (maximize for full QR)" \
+                --filename="$qr_txt" \
+                --editable \
+                --font="monospace 14" \
+                --width=700 --height=700 >/dev/null 2>/dev/null || true
+
+            rm -f "$qr_txt"
+            secret="[CLEARED]"
+            otpauth_uri="[CLEARED]"
+            response="[CLEARED]"
+
+            echo -e "${CYAN}Secret shown in GUI only.${NC}"
+
+            # Verify
+            echo -n "Enter a 6-digit TOTP code from your authenticator to verify: "
+            read -r verify_code
+
+            local verify_response2
+            verify_response2=$(send_request "{\"method\":\"verify_totp_setup\",\"params\":{\"code\":\"$verify_code\"}}")
+
+            local verify_success2=$(echo "$verify_response2" | jq -r '.success // false')
+            if [ "$verify_success2" = "true" ]; then
+                echo -e "${GREEN}2FA setup verified successfully!${NC}"
+            else
+                local error2=$(echo "$verify_response2" | jq -r '.error // "Unknown error"')
+                echo -e "${RED}Verification failed: ${error2}${NC}" >&2
+                echo -e "${YELLOW}Secret saved. Re-run 'scrt2 setup-2fa' to retry verification.${NC}"
+                flush_setup_traces
+                return 1
+            fi
+
+            # Generate fresh encryption keys (new auth = new keys)
+            echo -e "${CYAN}Generating fresh encryption keys...${NC}"
+            local init_response2
+            init_response2=$(send_request '{"method":"initialize_keys"}')
+            local init_success2=$(echo "$init_response2" | jq -r '.success // false')
+            if [ "$init_success2" = "true" ]; then
+                echo -e "${GREEN}Fresh master key generated and encrypted with DPAPI.${NC}"
+                echo -e "${GREEN}Empty secret store created.${NC}"
+                echo -e "${CYAN}Add secrets with: scrt2 add KEY=value${NC}"
+            else
+                local init_error2=$(echo "$init_response2" | jq -r '.error // "Unknown error"')
+                echo -e "${RED}Key generation failed: ${init_error2}${NC}" >&2
+                flush_setup_traces
+                return 1
+            fi
+
+            flush_setup_traces
+            echo -e "${CYAN}Audit logs and shell history flushed.${NC}"
+            ;;
+
+        agent)
+            # ── Agent mode: non-interactive, prints secret to stdout ──
+            # Designed for AI agents (Claude Code, etc.) that can't do interactive input.
+            # Secret is printed as plaintext — agent shows it to user for phone setup.
+            # Verification is automatic (compute_totp reads from disk).
+
+            # Step 1: Generate and save TOTP secret
+            local response
+            response=$(send_request '{"method":"setup_totp"}')
+            local success=$(echo "$response" | jq -r '.success // false')
+            if [ "$success" != "true" ]; then
+                local error=$(echo "$response" | jq -r '.error // "Unknown error"')
+                echo -e "${RED}Setup failed: ${error}${NC}" >&2
+                return 1
+            fi
+
+            if [ ! -f "$TOTP_SECRET_FILE" ]; then
+                echo -e "${RED}TOTP secret file not found after generation.${NC}" >&2
+                return 1
+            fi
+
+            # Step 2: Show QR code in terminal for phone scanning
+            local secret
+            secret=$(cat "$TOTP_SECRET_FILE")
+            local setup_ts=$(date '+%Y-%m-%d %H:%M')
+            local acct_label="LLM Secrets: ${setup_ts}"
+            local otpauth_uri="otpauth://totp/$(python3 -c "import urllib.parse; print(urllib.parse.quote('${acct_label}'))")?secret=${secret}&issuer=LLM%20Secrets&algorithm=SHA1&digits=6&period=30"
+
+            echo ""
+            echo -e "${CYAN}Scan this QR code with Google Authenticator:${NC}"
+            echo -e "${YELLOW}If you can't see the full QR code, press Ctrl+O to expand the terminal.${NC}"
+            echo ""
+            if command -v qrencode &>/dev/null; then
+                qrencode -t ANSIUTF8 "$otpauth_uri"
+            else
+                echo -e "${RED}qrencode not installed. Install: sudo apt install qrencode${NC}" >&2
+                echo -e "${YELLOW}Manual entry fallback:${NC}"
+                echo -e "  Account:  ${GREEN}${acct_label}${NC}"
+                echo -e "  Key:      ${GREEN}${secret}${NC}"
+                echo -e "  Type:     Time-based | SHA1 | 6 digits | 30s"
+            fi
+            echo ""
+
+            # Clear secret from memory immediately after QR render
+            secret="[CLEARED]"
+            otpauth_uri="[CLEARED]"
+
+            # Step 3: Wait for user confirmation
+            echo -n "Press Enter after scanning the QR code..."
+            read -r
+
+            # Step 4: Auto-verify using compute_totp (reads secret from disk)
+            echo -e "${CYAN}Verifying TOTP automatically...${NC}"
+            local totp_code
+            totp_code=$(compute_totp) || return 1
+
+            local verify_response
+            verify_response=$(send_request "{\"method\":\"verify_totp_setup\",\"params\":{\"code\":\"$totp_code\"}}")
+            local verify_success=$(echo "$verify_response" | jq -r '.success // false')
+            if [ "$verify_success" = "true" ]; then
+                echo -e "${GREEN}TOTP verified.${NC}"
+            else
+                local error=$(echo "$verify_response" | jq -r '.error // "Unknown error"')
+                echo -e "${RED}Verification failed: ${error}${NC}" >&2
+                flush_setup_traces
+                return 1
+            fi
+
+            # Step 5: Generate fresh encryption keys
+            echo -e "${CYAN}Generating fresh encryption keys...${NC}"
+            local init_response
+            init_response=$(send_request '{"method":"initialize_keys"}')
+            local init_success=$(echo "$init_response" | jq -r '.success // false')
+            if [ "$init_success" = "true" ]; then
+                echo -e "${GREEN}Fresh master key generated and encrypted with DPAPI.${NC}"
+                echo -e "${GREEN}Empty secret store created.${NC}"
+                echo -e "${CYAN}Add secrets with: scrt2 add KEY=value${NC}"
+            else
+                local init_error=$(echo "$init_response" | jq -r '.error // "Unknown error"')
+                echo -e "${RED}Key generation failed: ${init_error}${NC}" >&2
+                flush_setup_traces
+                return 1
+            fi
+
+            # Step 6: Flush traces
+            flush_setup_traces
+            echo -e "${CYAN}Audit logs and shell history flushed.${NC}"
+            ;;
+
+        *)
+            echo -e "${RED}Unknown mode: $mode${NC}" >&2
+            echo "Usage: scrt2 setup-2fa [manual|qr|agent]"
+            return 1
+            ;;
+    esac
+}
+
+cmd_extend() {
+    local ttl="${1:-}"
+    local json
+    if [ -n "$ttl" ]; then
+        json="{\"method\":\"extend\",\"params\":{\"ttl\":$ttl}}"
+    else
+        json='{"method":"extend"}'
+    fi
+
+    local response
+    response=$(send_request "$json")
+
+    local success=$(echo "$response" | jq -r '.success // false')
+    if [ "$success" = "true" ]; then
+        local remaining=$(echo "$response" | jq -r '.data.remaining // 0')
+        local mins=$((remaining / 60))
+        echo -e "${GREEN}Session extended. ${mins} minutes remaining.${NC}"
+    else
+        local error=$(echo "$response" | jq -r '.error // "Unknown error"')
+        echo -e "${RED}${error}${NC}" >&2
+        return 1
+    fi
+}
+
+cmd_view() {
+    # Check 2FA state from daemon
+    local tfa_response
+    tfa_response=$(send_request '{"method":"check_tfa_state"}')
+    local tfa_enabled=$(echo "$tfa_response" | jq -r '.data.enabled // false')
+
+    if [ "$tfa_enabled" = "true" ]; then
+        # ── 2FA mode: TOTP code replaces GUI challenge ──
+        local totp_code="${1:-}"
+
+        # If TOTP code provided as argument, use it immediately (time-sensitive, 30s window)
+        # Otherwise prompt via GUI or terminal
+        if [ -z "$totp_code" ]; then
+            if command -v zenity &>/dev/null; then
+                totp_code=$(zenity --entry --title="Scrt2 - 2FA Verification" \
+                    --text="Enter your Google Authenticator code:" \
+                    --width=300 2>/dev/null) || return 1
+            else
+                echo -n "Enter 2FA code: "
+                read -r totp_code
+            fi
+        fi
+
+        local response
+        response=$(send_request "{\"method\":\"reveal_all_totp\",\"params\":{\"totp_code\":\"$totp_code\"}}")
+        local success=$(echo "$response" | jq -r '.success // false')
+
+        if [ "$success" = "true" ]; then
+            local count=$(echo "$response" | jq -r '.data.secrets | length // 0')
+            if [ "$count" -eq 0 ] 2>/dev/null; then
+                echo -e "${YELLOW}No secrets stored. Add with: scrt2 add KEY=value${NC}"
+                return 0
+            fi
+            if ! command -v zenity &>/dev/null; then
+                echo -e "${RED}zenity required to view secrets (secrets are GUI-only, never printed to terminal).${NC}" >&2
+                echo -e "${YELLOW}Install: sudo apt install zenity${NC}"
+                return 1
+            fi
+            local secrets=$(echo "$response" | jq -r '.data.secrets | to_entries[] | "\(.key)=\(.value)"')
+            zenity --text-info --title="Scrt2 - All Secrets" \
+                --editable --width=800 --height=600 --font="monospace" <<< "$secrets" >/dev/null 2>/dev/null || true
+            secrets="[CLEARED]"
+            response="[CLEARED]"
+        else
+            local error=$(echo "$response" | jq -r '.error // "Unknown error"')
+            echo -e "${RED}${error}${NC}" >&2
+            return 1
+        fi
+    else
+        # ── GUI challenge mode (existing behavior when 2FA is disabled) ──
+        if ! command -v zenity &>/dev/null; then
+            echo -e "${RED}zenity required when 2FA is disabled. Install: sudo apt install zenity${NC}" >&2
+            echo -e "${YELLOW}Or re-enable 2FA: scrt2 2fa-reenable${NC}"
+            return 1
+        fi
+
+        # Phase 1: Request challenge
+        local response
+        response=$(send_request '{"method":"reveal_all"}')
+
+        local success=$(echo "$response" | jq -r '.success // false')
+        if [ "$success" != "true" ]; then
+            local error=$(echo "$response" | jq -r '.error // "Unknown error"')
+            echo -e "${RED}${error}${NC}" >&2
+            return 1
+        fi
+
+        local challenge=$(echo "$response" | jq -r '.data.challenge')
+        local code=$(echo "$response" | jq -r '.data.code')
+
+        # Show code in zenity info dialog
+        zenity --info --title="Scrt2 Verification" \
+            --text="<b>Verification Code:</b>\n\n<span font='24'>$code</span>\n\nEnter this code in the next dialog to reveal secrets." \
+            --width=300 2>/dev/null &
+
+        # Get code from user
+        local user_code
+        user_code=$(zenity --entry --title="Scrt2 Verification" \
+            --text="Enter the verification code:" \
+            --width=300 2>/dev/null) || return 1
+
+        # Phase 2: Confirm with code
+        response=$(send_request "{\"method\":\"reveal_all_confirm\",\"params\":{\"challenge\":\"$challenge\",\"code\":\"$user_code\"}}")
+
+        success=$(echo "$response" | jq -r '.success // false')
+        if [ "$success" = "true" ]; then
+            local secrets=$(echo "$response" | jq -r '.data.secrets | to_entries[] | "\(.key)=\(.value)"')
+            zenity --text-info --title="Scrt2 - All Secrets" \
+                --editable --width=800 --height=600 \
+                --font="monospace" \
+                <<< "$secrets" >/dev/null 2>/dev/null || true
+            secrets="[CLEARED]"
+            response="[CLEARED]"
+        else
+            local error=$(echo "$response" | jq -r '.error // "Unknown error"')
+            zenity --error --text="$error" 2>/dev/null
+            return 1
+        fi
+    fi
+}
+
+cmd_2fa_disable() {
+    local totp_code="${1:-}"
+
+    if [ -z "$totp_code" ]; then
+        if command -v zenity &>/dev/null; then
+            totp_code=$(zenity --entry --title="Scrt2 - Disable 2FA" \
+                --text="Enter your Google Authenticator code to disable 2FA:" \
+                --width=300 2>/dev/null) || return 1
+        else
+            echo -n "Enter 2FA code to disable: "
+            read -r totp_code
+        fi
+    fi
+
+    local response
+    response=$(send_request "{\"method\":\"disable_tfa\",\"params\":{\"totp_code\":\"$totp_code\"}}")
+    local success=$(echo "$response" | jq -r '.success // false')
+
+    if [ "$success" = "true" ]; then
+        echo -e "${GREEN}2FA disabled.${NC}"
+        echo -e "${YELLOW}Unlock and view no longer require Google Auth code.${NC}"
+        echo -e "${YELLOW}View will use GUI challenge. Re-enable with: scrt2 2fa-reenable${NC}"
+        # Confirm session is still active
+        local status_response
+        status_response=$(send_request '{"method":"status"}')
+        local active=$(echo "$status_response" | jq -r '.data.active // false')
+        if [ "$active" = "true" ]; then
+            local remaining=$(echo "$status_response" | jq -r '.data.remaining // 0')
+            local mins=$((remaining / 60))
+            echo -e "${GREEN}Session still active (${mins}m remaining).${NC}"
+        fi
+    else
+        local error=$(echo "$response" | jq -r '.error // "Unknown error"')
+        echo -e "${RED}${error}${NC}" >&2
+        return 1
+    fi
+}
+
+cmd_2fa_reenable() {
+    local totp_code="${1:-}"
+
+    if [ -z "$totp_code" ]; then
+        if command -v zenity &>/dev/null; then
+            totp_code=$(zenity --entry --title="Scrt2 - Re-enable 2FA" \
+                --text="Enter your Google Authenticator code to re-enable 2FA:" \
+                --width=300 2>/dev/null) || return 1
+        else
+            echo -n "Enter 2FA code to re-enable: "
+            read -r totp_code
+        fi
+    fi
+
+    local response
+    response=$(send_request "{\"method\":\"enable_tfa\",\"params\":{\"totp_code\":\"$totp_code\"}}")
+    local success=$(echo "$response" | jq -r '.success // false')
+
+    if [ "$success" = "true" ]; then
+        echo -e "${GREEN}2FA re-enabled for reveal operations.${NC}"
+    else
+        local error=$(echo "$response" | jq -r '.error // "Unknown error"')
+        echo -e "${RED}${error}${NC}" >&2
+        return 1
+    fi
+}
+
+cmd_add() {
+    if [ $# -eq 0 ]; then
+        echo -e "${RED}Usage: scrt2 add KEY=value [KEY2=value2 ...]${NC}" >&2
+        return 1
+    fi
+
+    # Build secrets JSON
+    local json_secrets="{"
+    local first=true
+    for pair in "$@"; do
+        local key="${pair%%=*}"
+        local value="${pair#*=}"
+        if [ "$first" = true ]; then
+            first=false
+        else
+            json_secrets+=","
+        fi
+        # Escape value for JSON
+        value=$(printf '%s' "$value" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()),end="")')
+        json_secrets+="\"$key\":$value"
+    done
+    json_secrets+="}"
+
+    local response
+    response=$(send_request "{\"method\":\"add_secrets\",\"params\":{\"secrets\":$json_secrets}}")
+
+    local success=$(echo "$response" | jq -r '.success // false')
+    if [ "$success" = "true" ]; then
+        local count=$(echo "$response" | jq -r '.data.count // 0')
+        echo -e "${GREEN}Added ${count} secret(s).${NC}"
+    else
+        local error=$(echo "$response" | jq -r '.error // "Unknown error"')
+        echo -e "${RED}${error}${NC}" >&2
+        return 1
+    fi
+}
+
+cmd_migrate() {
+    local old_key="${1:-}"
+    if [ -z "$old_key" ]; then
+        echo -e "${RED}Usage: scrt2 migrate <old-master-key-base64>${NC}" >&2
+        return 1
+    fi
+
+    local response
+    response=$(send_request "{\"method\":\"migrate\",\"params\":{\"old_key\":\"$old_key\"}}")
+
+    local success=$(echo "$response" | jq -r '.success // false')
+    if [ "$success" = "true" ]; then
+        local count=$(echo "$response" | jq -r '.data.count // 0')
+        echo -e "${GREEN}Migrated ${count} secret(s) to new master key.${NC}"
+    else
+        local error=$(echo "$response" | jq -r '.error // "Unknown error"')
+        echo -e "${RED}Migration failed: ${error}${NC}" >&2
+        return 1
+    fi
+}
+
+cmd_backup_key() {
+    local response
+    response=$(send_request '{"method":"backup_key"}')
+
+    local success=$(echo "$response" | jq -r '.success // false')
+    if [ "$success" = "true" ]; then
+        local key=$(echo "$response" | jq -r '.data.key')
+        echo -e "${CYAN}Master Key (save this securely!):${NC}"
+        echo "$key"
+    else
+        local error=$(echo "$response" | jq -r '.error // "Unknown error"')
+        echo -e "${RED}${error}${NC}" >&2
+        return 1
+    fi
+}
+
+cmd_help() {
+    echo "scrt2 v${VERSION} - WSL2 secure secret injector (TOTP edition)"
+    echo ""
+    echo "USAGE:"
+    echo "  scrt2 <command> [options]"
+    echo ""
+    echo "COMMANDS:"
+    echo "  daemon            Start the scrt2 daemon (foreground)"
+    echo "  setup-2fa         Configure 2FA via QR code in GUI (zenity)"
+    echo "  setup-2fa manual  Configure 2FA via hidden CLI input (no GUI)"
+    echo "  setup-2fa agent   Configure 2FA for AI agent use (non-interactive)"
+    echo "  unlock [ttl] [code] Authenticate with TOTP (default: 72000s / 20h)"
+    echo "  status            Check session status"
+    echo "  list              List secret names"
+    echo "  run <command>     Run command with \$env[NAME] substitution"
+    echo "  add KEY=val ...   Add secrets to active session"
+    echo "  view [code]       View secrets (2FA prompt or pass code; GUI challenge if 2FA disabled)"
+    echo "  2fa-disable [code] Disable 2FA for view (falls back to GUI challenge)"
+    echo "  2fa-reenable [code] Re-enable 2FA for view (uses existing TOTP secret)"
+    echo "  extend [ttl]      Reset session timer"
+    echo "  logout            Clear session (aliases: lock, clear)"
+    echo "  check-totp        Check TOTP configuration status"
+    echo "  migrate <key>     Migrate secrets from old master key"
+    echo "  backup-key        Show current master key"
+    echo "  help              Show this help"
+    echo ""
+    echo "GETTING STARTED:"
+    echo "  scrt2 daemon &                  # Start daemon in background"
+    echo "  scrt2 setup-2fa                 # Set up 2FA with QR code (GUI)"
+    echo "  scrt2 setup-2fa manual          # Set up 2FA via hidden CLI input"
+    echo "  scrt2 setup-2fa agent           # Set up 2FA for AI agent (non-interactive)"
+    echo "  scrt2 unlock                    # Authenticate (2 hour session)"
+    echo ""
+    echo "EXAMPLES:"
+    echo "  scrt2 unlock 28800              # 8 hour session"
+    echo "  scrt2 list                      # List secret names"
+    echo "  scrt2 run 'curl -H \"Auth: Bearer \$env[API_KEY]\" https://api.example.com'"
+    echo "  scrt2 add API_KEY=sk-123        # Add a secret"
+    echo "  scrt2 view                      # View secrets in GUI"
+}
+
+# "daemon" subcommand starts the daemon directly — no socket check needed
+if [ "${1:-}" = "daemon" ]; then
+    exec scrt2-daemon
+fi
+
+# All other commands require the daemon to be running
+if [ ! -S "$SOCKET" ]; then
+    echo -e "${RED}Daemon not running. Start with: scrt2 daemon${NC}" >&2
+    exit 1
+fi
+
+# Route command
+case "${1:-help}" in
+    unlock)       shift; cmd_unlock "$@" ;;
+    status)       cmd_status ;;
+    list)         cmd_list ;;
+    run)          shift; cmd_run "$@" ;;
+    logout|lock|clear) cmd_logout ;;
+    check-totp|check) cmd_check_totp ;;
+    setup-2fa)    shift; cmd_setup_2fa "$@" ;;
+    extend)       shift; cmd_extend "$@" ;;
+    view)         shift; cmd_view "$@" ;;
+    2fa-disable)  shift; cmd_2fa_disable "$@" ;;
+    2fa-reenable) shift; cmd_2fa_reenable "$@" ;;
+    add)          shift; cmd_add "$@" ;;
+    migrate)      shift; cmd_migrate "$@" ;;
+    backup-key)   cmd_backup_key ;;
+    help|--help|-h) cmd_help ;;
+    -v|--version) echo "scrt2 v${VERSION}" ;;
+    *)
+        echo -e "${RED}Unknown command: $1${NC}" >&2
+        cmd_help
+        exit 1
+        ;;
+esac

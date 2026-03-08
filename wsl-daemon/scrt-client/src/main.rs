@@ -6,10 +6,10 @@ use std::path::PathBuf;
 
 fn get_socket_path() -> PathBuf {
     if let Ok(runtime_dir) = env::var("XDG_RUNTIME_DIR") {
-        PathBuf::from(runtime_dir).join("scrt.sock")
+        PathBuf::from(runtime_dir).join("scrt2.sock")
     } else {
         let uid = unsafe { libc::getuid() };
-        PathBuf::from(format!("/tmp/scrt-{}.sock", uid))
+        PathBuf::from(format!("/tmp/scrt2-{}.sock", uid))
     }
 }
 
@@ -34,6 +34,7 @@ fn print_usage() {
     eprintln!();
     eprintln!("Commands:");
     eprintln!("  store <ttl>      - Read JSON {{token, secrets}} from stdin");
+    eprintln!("  unlock <ttl> <totp_code> - Unlock secrets with TOTP code");
     eprintln!("  clear            - Clear session");
     eprintln!("  status           - Check session status");
     eprintln!("  list             - List secret names");
@@ -72,6 +73,24 @@ fn main() {
                     "token": input_json["token"],
                     "secrets": input_json["secrets"],
                     "ttl": ttl
+                }
+            }))
+        }
+
+        "unlock" => {
+            if args.len() < 4 {
+                eprintln!("ERROR: TTL and TOTP code required");
+                eprintln!("Usage: scrt-client unlock <ttl> <totp_code>");
+                std::process::exit(1);
+            }
+            let ttl: u64 = args[2].parse().unwrap_or(7200);
+            let totp_code = &args[3];
+
+            send_request(&serde_json::json!({
+                "method": "unlock",
+                "params": {
+                    "ttl": ttl,
+                    "totp_code": totp_code
                 }
             }))
         }
@@ -123,6 +142,10 @@ fn main() {
                 if let Some(data) = response.get("data") {
                     // Format output based on command
                     match command.as_str() {
+                        "unlock" => {
+                            let count = data["count"].as_u64().unwrap_or(0);
+                            println!("UNLOCKED:{}", count);
+                        }
                         "status" => {
                             let active = data["active"].as_bool().unwrap_or(false);
                             let remaining = data["remaining"].as_i64().unwrap_or(0);

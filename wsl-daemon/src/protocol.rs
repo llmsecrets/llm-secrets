@@ -66,16 +66,27 @@ pub enum Request {
         secrets: HashMap<String, String>,
     },
 
-    /// Unlock secrets via Windows Hello (triggers biometric auth)
-    /// This decrypts secrets from disk and loads them into memory
+    /// Unlock secrets via TOTP authentication
+    /// This verifies the TOTP code, decrypts secrets, and loads them into memory
     #[serde(rename = "unlock")]
     Unlock {
-        ttl: Option<u64>,  // Session TTL in seconds, default 7200 (2 hours)
+        ttl: Option<u64>,      // Session TTL in seconds, default 7200 (2 hours)
+        totp_code: String,     // 6-digit TOTP code
     },
 
-    /// Check if Windows Hello is available
-    #[serde(rename = "check_hello")]
-    CheckHello,
+    /// Check if TOTP is configured
+    #[serde(rename = "check_totp")]
+    CheckTotp,
+
+    /// Generate a new TOTP secret (for initial setup)
+    #[serde(rename = "setup_totp")]
+    SetupTotp,
+
+    /// Verify a TOTP code during setup (confirms user scanned QR correctly)
+    #[serde(rename = "verify_totp_setup")]
+    VerifyTotpSetup {
+        code: String,
+    },
 
     /// Extend the current session (reset timer, optionally change TTL)
     #[serde(rename = "extend")]
@@ -92,6 +103,31 @@ pub enum Request {
     Migrate {
         old_key: String,  // Base64-encoded old master key (44 chars)
     },
+
+    /// Generate fresh encryption keys and reset the secret store
+    /// Called during setup-2fa to bind new auth to new encryption
+    #[serde(rename = "initialize_keys")]
+    InitializeKeys,
+
+    /// Reveal all secrets using TOTP authentication (bypasses GUI challenge)
+    #[serde(rename = "reveal_all_totp")]
+    RevealAllTotp { totp_code: String },
+
+    /// Reveal single secret using TOTP authentication (bypasses GUI challenge)
+    #[serde(rename = "reveal_totp")]
+    RevealTotp { name: String, totp_code: String },
+
+    /// Check 2FA state (configured + enabled/disabled)
+    #[serde(rename = "check_tfa_state")]
+    CheckTfaState,
+
+    /// Disable 2FA for reveal operations (requires valid TOTP to prove authenticator access)
+    #[serde(rename = "disable_tfa")]
+    DisableTfa { totp_code: String },
+
+    /// Re-enable 2FA for reveal operations (requires valid TOTP)
+    #[serde(rename = "enable_tfa")]
+    EnableTfa { totp_code: String },
 }
 
 /// Response from daemon to client
@@ -118,11 +154,13 @@ pub enum ResponseData {
     Reveal { value: String },
     Challenge { challenge: String, prompt: String, code: String },
     RevealAll { secrets: HashMap<String, String> },
-    HelloAvailable { available: bool },
+    TotpConfigured { configured: bool },
+    TotpSetup { secret: String, otpauth_uri: String },
     Unlocked { count: usize },
     Extended { remaining: i64 },
     BackupKey { key: String },
     Migrated { count: usize },
+    TfaState { configured: bool, enabled: bool },
 }
 
 #[derive(Debug, Serialize)]

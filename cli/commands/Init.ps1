@@ -5,16 +5,32 @@ function Invoke-ScrtInit {
     <#
     .SYNOPSIS
     Setup wizard for scrt secrets management.
+
+    .PARAMETER InstallWSL
+    Also install WSL (Ubuntu) if not already installed.
+    Requires administrator privileges and may need a restart.
+
+    .EXAMPLE
+    scrt init
+    scrt init --install-wsl
+    scrt init -Mode simple --install-wsl
     #>
     param(
         [ValidateSet("simple", "advanced", "")]
         [string]$Mode = "",
-        [switch]$Force
+        [switch]$Force,
+        [Alias("install-wsl")]
+        [switch]$InstallWSL
     )
 
     Write-ScrtLogOperation -Operation "init" -Details "mode=$Mode, force=$Force"
 
     Write-ScrtHeader "scrt init - Setup Wizard"
+
+    # Handle WSL installation if requested
+    if ($InstallWSL) {
+        Install-WSLDependency
+    }
 
     # Check current state
     $settings = Get-Settings
@@ -266,4 +282,71 @@ function Initialize-AdvancedMode {
 
     Write-ScrtLogResult -Operation "init" -Success $true -Details "Advanced mode configured"
     return $true
+}
+
+function Install-WSLDependency {
+    <#
+    .SYNOPSIS
+    Checks for WSL and installs it if missing.
+    Required for scrt's WSL daemon component.
+    #>
+
+    Write-Host ""
+    Write-Host "Checking WSL installation..." -ForegroundColor Cyan
+
+    $wslInstalled = $false
+    try {
+        $null = wsl --status 2>&1
+        $distros = (wsl --list --quiet 2>&1) | Where-Object { $_ -and $_.Trim() -ne "" }
+        if ($distros -and $distros.Count -gt 0) {
+            $wslInstalled = $true
+        }
+    } catch {}
+
+    if ($wslInstalled) {
+        Write-Host "WSL is already installed." -ForegroundColor Green
+        Write-Host ""
+        return
+    }
+
+    Write-Host "WSL not found. Installing..." -ForegroundColor Yellow
+    Write-Host ""
+
+    # Check admin privileges
+    $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    if (-not $isAdmin) {
+        Write-Host "WSL installation requires administrator privileges." -ForegroundColor Red
+        Write-Host ""
+        Write-Host "Option 1: Re-run as admin:" -ForegroundColor Yellow
+        Write-Host "  Start-Process powershell -Verb RunAs -ArgumentList 'scrt init --install-wsl'" -ForegroundColor White
+        Write-Host ""
+        Write-Host "Option 2: Install WSL manually:" -ForegroundColor Yellow
+        Write-Host "  wsl --install -d Ubuntu" -ForegroundColor White
+        Write-Host ""
+        return
+    }
+
+    Write-Host "Installing WSL with Ubuntu (this may take a few minutes)..." -ForegroundColor Gray
+    wsl --install -d Ubuntu
+
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "WSL installation failed. Try manually: wsl --install -d Ubuntu" -ForegroundColor Red
+        return
+    }
+
+    Write-Host ""
+    Write-Host "========================================" -ForegroundColor Yellow
+    Write-Host "  RESTART REQUIRED" -ForegroundColor Yellow
+    Write-Host "========================================" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "WSL installed. After restarting:" -ForegroundColor Yellow
+    Write-Host "  1. Open Ubuntu from Start menu (first-time setup)" -ForegroundColor Gray
+    Write-Host "  2. Create your Linux username and password" -ForegroundColor Gray
+    Write-Host "  3. Run 'scrt init' again to continue setup" -ForegroundColor Gray
+    Write-Host ""
+
+    $restart = Read-Host "Restart now? (yes/no)"
+    if ($restart -eq "yes") {
+        Restart-Computer -Force
+    }
 }

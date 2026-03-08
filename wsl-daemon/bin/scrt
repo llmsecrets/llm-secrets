@@ -7,6 +7,7 @@ set -euo pipefail
 VERSION="0.3.0"
 SOCKET="${XDG_RUNTIME_DIR:-/tmp}/scrt.sock"
 CLIENT="scrt-client"
+TOTP_SECRET_FILE="$HOME/.scrt/totp.secret"
 
 # Colors
 RED='\033[0;31m'
@@ -26,10 +27,49 @@ send_request() {
     fi
 }
 
+# Compute TOTP code from stored secret using Python3 stdlib
+compute_totp() {
+    if [ ! -f "$TOTP_SECRET_FILE" ]; then
+        echo -e "${RED}TOTP not configured. Run 'scrt setup-totp' first.${NC}" >&2
+        return 1
+    fi
+
+    local secret
+    secret=$(cat "$TOTP_SECRET_FILE")
+
+    python3 -c "
+import hmac, hashlib, struct, time, base64
+
+secret_b32 = '$secret'.strip()
+# Decode base32 secret (add padding if needed)
+padding = '=' * ((8 - len(secret_b32) % 8) % 8)
+key = base64.b32decode(secret_b32 + padding, casefold=True)
+
+# TOTP: current time step
+counter = int(time.time()) // 30
+msg = struct.pack('>Q', counter)
+
+# HMAC-SHA1
+h = hmac.new(key, msg, hashlib.sha1).digest()
+
+# Dynamic truncation
+offset = h[-1] & 0x0F
+code = struct.unpack('>I', h[offset:offset+4])[0] & 0x7FFFFFFF
+code = code % 10**6
+
+print(f'{code:06d}')
+"
+}
+
 cmd_unlock() {
     local ttl="${1:-7200}"
+
+    # Auto-compute TOTP code
+    local totp_code
+    totp_code=$(compute_totp) || return 1
+
     local response
-    response=$(send_request "{\"method\":\"unlock\",\"params\":{\"ttl\":$ttl}}")
+    response=$(send_request "{\"method\":\"unlock\",\"params\":{\"ttl\":$ttl,\"totp_code\":\"$totp_code\"}}")
 
     local success=$(echo "$response" | jq -r '.success // false')
     if [ "$success" = "true" ]; then
@@ -99,15 +139,66 @@ cmd_logout() {
     fi
 }
 
-cmd_check_hello() {
+cmd_check_totp() {
     local response
-    response=$(send_request '{"method":"check_hello"}')
+    response=$(send_request '{"method":"check_totp"}')
 
-    local available=$(echo "$response" | jq -r '.data.available // false')
-    if [ "$available" = "true" ]; then
-        echo -e "${GREEN}Windows Hello is available.${NC}"
+    local configured=$(echo "$response" | jq -r '.data.configured // false')
+    if [ "$configured" = "true" ]; then
+        echo -e "${GREEN}TOTP is configured.${NC}"
     else
-        echo -e "${YELLOW}Windows Hello is not available.${NC}"
+        echo -e "${YELLOW}TOTP is not configured. Run 'scrt setup-totp' to set up.${NC}"
+    fi
+}
+
+cmd_setup_totp() {
+    local response
+    response=$(send_request '{"method":"setup_totp"}')
+
+    local success=$(echo "$response" | jq -r '.success // false')
+    if [ "$success" != "true" ]; then
+        local error=$(echo "$response" | jq -r '.error // "Unknown error"')
+        echo -e "${RED}Setup failed: ${error}${NC}" >&2
+        return 1
+    fi
+
+    local secret=$(echo "$response" | jq -r '.data.secret')
+    local otpauth_uri=$(echo "$response" | jq -r '.data.otpauth_uri')
+
+    echo -e "${CYAN}TOTP Setup${NC}"
+    echo ""
+    echo -e "Secret (base32): ${GREEN}${secret}${NC}"
+    echo ""
+    echo -e "OTPAuth URI: ${otpauth_uri}"
+    echo ""
+
+    # Show QR code if qrencode is available
+    if command -v qrencode &>/dev/null; then
+        echo "Scan this QR code with Google Authenticator:"
+        echo ""
+        qrencode -t UTF8 "$otpauth_uri"
+        echo ""
+    else
+        echo "Install qrencode for QR code display: sudo apt install qrencode"
+        echo "Or manually enter the secret in your authenticator app."
+        echo ""
+    fi
+
+    # Verify setup
+    echo -n "Enter a TOTP code from your authenticator to verify: "
+    read -r verify_code
+
+    local verify_response
+    verify_response=$(send_request "{\"method\":\"verify_totp_setup\",\"params\":{\"code\":\"$verify_code\"}}")
+
+    local verify_success=$(echo "$verify_response" | jq -r '.success // false')
+    if [ "$verify_success" = "true" ]; then
+        echo -e "${GREEN}TOTP setup verified successfully!${NC}"
+    else
+        local error=$(echo "$verify_response" | jq -r '.error // "Unknown error"')
+        echo -e "${RED}Verification failed: ${error}${NC}" >&2
+        echo -e "${YELLOW}The secret has been saved. You can retry verification with 'scrt check-totp'.${NC}"
+        return 1
     fi
 }
 
@@ -264,7 +355,7 @@ cmd_help() {
     echo "  scrt <command> [options]"
     echo ""
     echo "COMMANDS:"
-    echo "  unlock [ttl]      Authenticate with Windows Hello (default: 7200s)"
+    echo "  unlock [ttl]      Authenticate with TOTP (default: 7200s)"
     echo "  status            Check session status"
     echo "  list              List secret names"
     echo "  run <command>     Run command with \$env[NAME] substitution"
@@ -272,12 +363,14 @@ cmd_help() {
     echo "  view              View all secrets in GUI (zenity)"
     echo "  extend [ttl]      Reset session timer"
     echo "  logout            Clear session (aliases: lock, clear)"
-    echo "  check-hello       Check Windows Hello availability"
+    echo "  setup-totp        Configure TOTP (Google Authenticator)"
+    echo "  check-totp        Check TOTP configuration status"
     echo "  migrate <key>     Migrate secrets from old master key"
     echo "  backup-key        Show current master key"
     echo "  help              Show this help"
     echo ""
     echo "EXAMPLES:"
+    echo "  scrt setup-totp                # Initial TOTP setup"
     echo "  scrt unlock                    # Authenticate (2 hour session)"
     echo "  scrt unlock 28800              # 8 hour session"
     echo "  scrt list                      # List secret names"
@@ -299,7 +392,8 @@ case "${1:-help}" in
     list)         cmd_list ;;
     run)          shift; cmd_run "$@" ;;
     logout|lock|clear) cmd_logout ;;
-    check-hello|check) cmd_check_hello ;;
+    check-totp|check) cmd_check_totp ;;
+    setup-totp)   cmd_setup_totp ;;
     extend)       shift; cmd_extend "$@" ;;
     view)         cmd_view ;;
     add)          shift; cmd_add "$@" ;;

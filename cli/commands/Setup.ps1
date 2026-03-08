@@ -213,6 +213,81 @@ function Invoke-ScrtSetup {
     Write-Host "  scrt run -- <command>  # Run with secrets injected" -ForegroundColor White
     Write-Host ""
 
+    # Step 6: Set up Claude Code integration
+    Setup-ClaudeCode
+
     Write-ScrtLogResult -Operation "setup" -Success $true -Details "Setup complete"
     return $true
+}
+
+function Setup-ClaudeCode {
+    <#
+    .SYNOPSIS
+    Creates or updates ~/.claude/CLAUDE.md with scrt reference.
+    Called automatically during setup so Claude Code knows how to use scrt.
+    #>
+
+    # Check if Claude Code is installed
+    $claudeDir = Join-Path $env:USERPROFILE ".claude"
+    $wslClaudeDir = if ($env:HOME) { Join-Path $env:HOME ".claude" } else { $null }
+
+    # Try Windows path first, then WSL
+    $targetDir = if (Test-Path $claudeDir) { $claudeDir }
+                 elseif ($wslClaudeDir -and (Test-Path $wslClaudeDir)) { $wslClaudeDir }
+                 else { $null }
+
+    if (-not $targetDir) {
+        # Claude Code not installed, skip silently
+        return
+    }
+
+    $claudeMd = Join-Path $targetDir "CLAUDE.md"
+    $marker = "## How Secret Injection Works"
+
+    if (-not (Test-Path $claudeMd)) {
+        # Create new CLAUDE.md
+        $content = @"
+# Scrt - Secret Access Reference
+
+## How Secret Injection Works
+
+Secrets are stored encrypted and injected at runtime as environment
+variables. You NEVER see the actual values.
+
+**IMPORTANT:** Use ``$env[SECRET_NAME]`` syntax (NOT ``$SECRET_NAME``)
+
+``````bash
+scrt run 'forge script Deploy.s.sol --rpc-url `$env[ALCHEMY_RPC_URL] --private-key `$env[PRIVATE_KEY] --broadcast'
+scrt run 'curl -H "Authorization: Bearer `$env[API_KEY]" https://api.example.com'
+``````
+
+Run ``scrt learn`` to regenerate this file with your current secret names.
+"@
+        Set-Content -Path $claudeMd -Value $content -Encoding UTF8
+        Write-Host "  Created ~/.claude/CLAUDE.md with scrt reference" -ForegroundColor Gray
+
+    } elseif (-not (Select-String -Path $claudeMd -Pattern "scrt" -Quiet -SimpleMatch)) {
+        # Append scrt section
+        $appendContent = @"
+
+---
+
+## Scrt - Secret Injection
+
+Use ``$env[SECRET_NAME]`` syntax. Values are injected at runtime
+and never returned to the LLM.
+
+``````bash
+scrt unlock                  # Authenticate with Windows Hello
+scrt list                    # List secret names
+scrt run 'cmd `$env[KEY]'    # Run command with secret injection
+scrt help                    # Full command list
+``````
+"@
+        Add-Content -Path $claudeMd -Value $appendContent -Encoding UTF8
+        Write-Host "  Added scrt section to ~/.claude/CLAUDE.md" -ForegroundColor Gray
+
+    } else {
+        Write-Host "  ~/.claude/CLAUDE.md already has scrt reference" -ForegroundColor Gray
+    }
 }

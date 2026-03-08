@@ -1,14 +1,11 @@
 // wsl2-daemon/src/dpapi.rs
-//! Windows Hello & DPAPI integration via PowerShell bridge
+//! DPAPI integration via PowerShell bridge
 //!
-//! Calls the hello-bridge.ps1 script on the Windows side to:
-//! - Trigger Windows Hello facial recognition
-//! - Retrieve GPG passphrase from DPAPI-protected storage
-//!
-//! This allows the daemon to unlock secrets after biometric auth.
+//! Retrieves DPAPI-protected master key from the Windows side and
+//! handles AES-256-CBC encryption/decryption of the .env file.
+//! Authentication is handled by the TOTP module.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::process::Command;
 
 use aes::Aes256;
@@ -25,6 +22,7 @@ fn get_powershell_path() -> &'static str {
 }
 
 /// Detect the Windows username from WSL2 environment
+#[cfg(test)]
 fn get_windows_username() -> Result<String, String> {
     // Method 1: Check USERPROFILE env var (forwarded from Windows via WSLENV)
     if let Ok(userprofile) = std::env::var("USERPROFILE") {
@@ -55,9 +53,9 @@ fn get_windows_username() -> Result<String, String> {
             return Ok(user_dirs[0].clone());
         }
 
-        // Method 3: Look for the one that has AppData\Roaming\LLM Secrets
+        // Method 3: Look for the one that has AppData\Roaming\LLM Secrets 2
         for dir in &user_dirs {
-            let check_path = format!("/mnt/c/Users/{}/AppData/Roaming/LLM Secrets", dir);
+            let check_path = format!("/mnt/c/Users/{}/AppData/Roaming/LLM Secrets 2", dir);
             if std::path::Path::new(&check_path).exists() {
                 return Ok(dir.clone());
             }
@@ -67,41 +65,15 @@ fn get_windows_username() -> Result<String, String> {
     Err("Could not detect Windows username. Set USERPROFILE environment variable.".into())
 }
 
-/// Get the path to WindowsHelloAuth.exe
-fn get_windows_hello_auth_path() -> Result<PathBuf, String> {
-    let username = get_windows_username()?;
-    Ok(PathBuf::from(format!(
-        "/mnt/c/Users/{}/AppData/Roaming/LLM Secrets/WindowsHelloAuth.exe",
-        username
-    )))
-}
-
-/// Check if Windows Hello is available
-pub fn check_hello_available() -> Result<bool, String> {
-    let auth_exe = get_windows_hello_auth_path()?;
-
-    if !auth_exe.exists() {
-        return Err("WindowsHelloAuth.exe not found. Install the LLM Secrets app first.".into());
-    }
-
-    // WindowsHelloAuth.exe outputs "Windows Hello is available" if available
-    let output = Command::new(&auth_exe)
-        .output()
-        .map_err(|e| format!("Failed to run WindowsHelloAuth: {}", e))?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    Ok(stdout.contains("Windows Hello is available") || stdout.contains("SUCCESS"))
-}
-
 /// Get master key from Electron app's DPAPI storage
 ///
-/// The master key is stored at %APPDATA%\LLM Secrets\credentials\EnvCrypto_DpapiMasterKey.dat
+/// The master key is stored at %APPDATA%\LLM Secrets 2\credentials\EnvCrypto_DpapiMasterKey.dat
 /// as a JSON file with a hex-encoded DPAPI blob.
 pub fn get_master_key_from_electron_dpapi() -> Result<String, String> {
     let ps_command = r#"
-        $keyPath = Join-Path $env:APPDATA 'LLM Secrets\credentials\EnvCrypto_DpapiMasterKey.dat'
+        $keyPath = Join-Path $env:APPDATA 'LLM Secrets 2\credentials\EnvCrypto_DpapiMasterKey.dat'
         if (-not (Test-Path $keyPath)) {
-            Write-Error 'Master key file not found. Run LLM Secrets setup first.'
+            Write-Error 'Master key file not found. Copy credentials from LLM Secrets first.'
             exit 1
         }
         $json = Get-Content $keyPath -Raw | ConvertFrom-Json
@@ -152,12 +124,12 @@ fn extract_data_from_env_json(json_content: &str) -> Result<String, String> {
 
 /// Decrypt .env file using master key
 ///
-/// Uses the LLM Secrets Electron app's encrypted env files at %APPDATA%\LLM Secrets\env\
+/// Uses encrypted env files at %APPDATA%\LLM Secrets 2\env\
 /// Returns a HashMap of secret name -> value pairs.
 pub fn decrypt_env_with_master_key(master_key: &str) -> Result<HashMap<String, String>, String> {
     // Read the encrypted env file via PowerShell (to handle Windows paths)
     let ps_command = r#"
-        $envDir = Join-Path $env:APPDATA 'LLM Secrets\env'
+        $envDir = Join-Path $env:APPDATA 'LLM Secrets 2\env'
         if (-not (Test-Path $envDir)) {
             Write-Error 'Env directory not found'
             exit 1
@@ -276,36 +248,37 @@ fn decrypt_env_content_with_master_key(
         .map_err(|e| format!("Decrypted data is not valid UTF-8: {}", e))
 }
 
-/// Full unlock flow: Windows Hello -> DPAPI Master key -> Decrypt secrets
+/// Full unlock flow: TOTP verify -> DPAPI Master key -> Decrypt secrets
 ///
-/// Uses the LLM Secrets Electron app's storage:
-/// - Master key: %APPDATA%\LLM Secrets\credentials\EnvCrypto_DpapiMasterKey.dat
-/// - Secrets: %APPDATA%\LLM Secrets\env\.env.encrypted.v*
+/// Uses storage at:
+/// - Master key: %APPDATA%\LLM Secrets 2\credentials\EnvCrypto_DpapiMasterKey.dat
+/// - Secrets: %APPDATA%\LLM Secrets 2\env\.env.encrypted.v*
 /// Returns (secrets, master_key) — master key is retained for re-encryption on save
-pub async fn unlock_secrets() -> Result<(HashMap<String, String>, String), String> {
-    tracing::info!("Starting unlock flow with Windows Hello");
+pub async fn unlock_secrets(totp_code: &str) -> Result<(HashMap<String, String>, String), String> {
+    tracing::info!("Starting unlock flow with TOTP");
 
-    // Step 1: Authenticate with Windows Hello
-    let auth_exe = get_windows_hello_auth_path()?;
-    if !auth_exe.exists() {
-        return Err("WindowsHelloAuth.exe not found. Install the LLM Secrets app first.".into());
+    // Step 1: Verify TOTP code
+    match crate::totp::verify_totp_code(totp_code) {
+        Ok(true) => {}
+        Ok(false) => return Err("Invalid TOTP code".into()),
+        Err(e) => return Err(e),
     }
+    tracing::info!("TOTP authentication successful");
 
-    let auth_output = Command::new(&auth_exe)
-        .output()
-        .map_err(|e| format!("Failed to run WindowsHelloAuth: {}", e))?;
+    // Steps 2-3: DPAPI decrypt
+    unlock_secrets_dpapi_only().await
+}
 
-    let stdout = String::from_utf8_lossy(&auth_output.stdout);
-    if !stdout.contains("SUCCESS") {
-        return Err("Windows Hello authentication failed or cancelled".into());
-    }
-    tracing::info!("Windows Hello authentication successful");
+/// Unlock secrets using only DPAPI (no TOTP verification).
+/// Used when 2FA is disabled — DPAPI is the sole authentication gate.
+pub async fn unlock_secrets_dpapi_only() -> Result<(HashMap<String, String>, String), String> {
+    tracing::info!("Starting unlock flow (DPAPI only)");
 
-    // Step 2: Get master key from Electron app's DPAPI storage
+    // Step 1: Get master key from Electron app's DPAPI storage
     let master_key = get_master_key_from_electron_dpapi()?;
     tracing::info!("Master key retrieved from DPAPI");
 
-    // Step 3: Decrypt .env file using master key
+    // Step 2: Decrypt .env file using master key
     let secrets = decrypt_env_with_master_key(&master_key)?;
     tracing::info!("Decrypted {} secrets", secrets.len());
 
@@ -383,7 +356,7 @@ pub fn save_encrypted_env(
     // Write to the next version file via PowerShell
     let ps_command = format!(
         r#"
-        $envDir = Join-Path $env:APPDATA 'LLM Secrets\env'
+        $envDir = Join-Path $env:APPDATA 'LLM Secrets 2\env'
         if (-not (Test-Path $envDir)) {{
             New-Item -ItemType Directory -Path $envDir -Force | Out-Null
         }}
@@ -424,6 +397,93 @@ pub fn save_encrypted_env(
 /// Used for backup functionality
 pub fn get_current_master_key() -> Result<String, String> {
     get_master_key_from_electron_dpapi()
+}
+
+/// Generate a fresh 32-byte master key, DPAPI-encrypt it, and save to credentials dir.
+///
+/// This overwrites any existing master key — used during setup-2fa to ensure
+/// new authentication = new encryption keys = clean secret store.
+/// Returns the base64-encoded master key (44 chars).
+pub fn generate_new_master_key() -> Result<String, String> {
+    use base64::Engine;
+    let engine = base64::engine::general_purpose::STANDARD;
+
+    // Generate 32 cryptographically random bytes
+    let mut key_bytes = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut key_bytes);
+    let master_key_b64 = engine.encode(key_bytes);
+
+    // DPAPI-encrypt and save via PowerShell
+    // Encode as UTF-16LE to match Electron app format, then DPAPI protect
+    let ps_command = format!(
+        r#"
+        $masterKey = '{}'
+        $bytes = [System.Text.Encoding]::Unicode.GetBytes($masterKey)
+        Add-Type -AssemblyName System.Security
+        $encrypted = [System.Security.Cryptography.ProtectedData]::Protect($bytes, $null, 'CurrentUser')
+        $hex = [BitConverter]::ToString($encrypted) -replace '-',''
+
+        $credDir = Join-Path $env:APPDATA 'LLM Secrets 2\credentials'
+        if (-not (Test-Path $credDir)) {{
+            New-Item -ItemType Directory -Path $credDir -Force | Out-Null
+        }}
+
+        $keyPath = Join-Path $credDir 'EnvCrypto_DpapiMasterKey.dat'
+        $json = '{{"EncryptedKey":"' + $hex.ToLower() + '"}}'
+        [System.IO.File]::WriteAllText($keyPath, $json)
+        Write-Output 'OK'
+    "#, master_key_b64);
+
+    let output = Command::new(get_powershell_path())
+        .args(["-ExecutionPolicy", "Bypass", "-Command", &ps_command])
+        .output()
+        .map_err(|e| format!("Failed to run PowerShell: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Failed to generate master key: {}", stderr));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    if !stdout.trim().contains("OK") {
+        return Err("Unexpected output from key generation".into());
+    }
+
+    tracing::info!("Generated and DPAPI-encrypted fresh master key");
+    Ok(master_key_b64)
+}
+
+/// Delete all existing encrypted env files and create a fresh empty one.
+///
+/// Called after generating a new master key during setup-2fa to ensure
+/// the new key starts with an empty secret store.
+pub fn reset_encrypted_env(master_key: &str) -> Result<(), String> {
+    // Delete all existing .env.encrypted.v* files
+    let ps_command = r#"
+        $envDir = Join-Path $env:APPDATA 'LLM Secrets 2\env'
+        if (Test-Path $envDir) {
+            Get-ChildItem $envDir -Filter '.env.encrypted.v*' | Remove-Item -Force
+            Write-Output "Cleaned"
+        } else {
+            Write-Output "NoDir"
+        }
+    "#;
+
+    let output = Command::new(get_powershell_path())
+        .args(["-ExecutionPolicy", "Bypass", "-Command", ps_command])
+        .output()
+        .map_err(|e| format!("Failed to run PowerShell: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Failed to clean env files: {}", stderr));
+    }
+
+    // Create a fresh empty .env.encrypted.v1
+    save_encrypted_env(&HashMap::new(), master_key)?;
+
+    tracing::info!("Reset encrypted env to empty store");
+    Ok(())
 }
 
 /// Decrypt secrets using a specific master key (for migration from old key)

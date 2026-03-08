@@ -56,6 +56,16 @@ pub enum EventType {
     BackupKeyRequested,
     /// Key migration (old key -> new key)
     KeyMigration,
+    /// Fresh encryption keys generated during setup
+    KeysInitialized,
+    /// 2FA disabled for reveal operations
+    TfaDisabled,
+    /// 2FA re-enabled for reveal operations
+    TfaEnabled,
+    /// All secrets revealed via TOTP
+    TfaRevealAll,
+    /// Single secret revealed via TOTP
+    TfaReveal,
     /// Daemon started
     DaemonStart,
     /// Daemon stopped
@@ -302,7 +312,7 @@ impl AuditLogger {
     pub fn new(log_dir: Option<PathBuf>) -> Self {
         let log_dir = log_dir.unwrap_or_else(|| {
             let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-            PathBuf::from(home).join(".scrt").join("audit")
+            PathBuf::from(home).join(".scrt2").join("audit")
         });
 
         // Ensure directory exists

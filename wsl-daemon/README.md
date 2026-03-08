@@ -153,6 +153,19 @@ make test
 make clean
 ```
 
+## Development: scrt2 (TOTP branch)
+
+The `feature/totp-auth` branch renames all identifiers to `scrt2` / `LLM Secrets 2` so the development build can run side-by-side with the production `scrt` installation without conflicts. This is strictly for local testing of the WSL TOTP-based secrets manager.
+
+**What's different in scrt2:**
+- Socket: `scrt2.sock` (instead of `scrt.sock`)
+- Binaries: `scrt2-daemon`, `scrt2-client`, `scrt2`
+- Config: `~/.scrt2/` (instead of `~/.scrt/`)
+- Windows data: `%APPDATA%\LLM Secrets 2\` (instead of `%APPDATA%\LLM Secrets\`)
+- Auth: TOTP (Google Authenticator) instead of Windows Hello
+
+These renames will be reverted back to `scrt` / `LLM Secrets` when the TOTP feature is merged to production.
+
 ## Security Notice
 
 This package has been scanned for secrets before distribution.

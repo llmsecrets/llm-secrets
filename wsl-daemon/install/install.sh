@@ -169,3 +169,66 @@ echo "  scrt run <cmd>  # Run command with secrets injected"
 echo ""
 echo "Make sure ~/.local/bin is in your PATH:"
 echo '  export PATH="$HOME/.local/bin:$PATH"'
+
+# Set up Claude Code integration (global CLAUDE.md)
+setup_claude_code() {
+    local claude_dir="$HOME/.claude"
+    local claude_md="$claude_dir/CLAUDE.md"
+    local marker="## scrt2"
+
+    mkdir -p "$claude_dir"
+
+    # If CLAUDE.md doesn't exist, create it with scrt2 section
+    if [ ! -f "$claude_md" ]; then
+        cat > "$claude_md" << 'CLAUDEEOF'
+# Secret Access Reference
+
+## scrt2 — WSL2 Secure Secret Injector (TOTP Edition)
+
+Use `$env[SECRET_NAME]` syntax for secret injection. Values are injected
+at runtime and never returned to the LLM.
+
+```bash
+scrt2 unlock                # Authenticate (20h session)
+scrt2 list                  # List secret names
+scrt2 run 'cmd $env[KEY]'   # Run command with secret injection
+scrt2 add KEY=value         # Add a secret
+scrt2 setup-2fa agent       # AI agent setup (non-interactive)
+scrt2 help                  # Full command list
+```
+
+Run `scrt2 learn` to regenerate this file with your current secret names.
+CLAUDEEOF
+        echo "Created ~/.claude/CLAUDE.md with scrt2 reference"
+
+    # If CLAUDE.md exists but doesn't mention scrt2, append section
+    elif ! grep -qF "$marker" "$claude_md" 2>/dev/null; then
+        cat >> "$claude_md" << 'CLAUDEEOF'
+
+---
+
+## scrt2 — Dev/Beta (Unstable)
+
+scrt2 is an unstable dev/beta version with experimental features.
+Most users do not have scrt2 installed. Use `$env[SECRET_NAME]` syntax.
+
+```bash
+scrt2 unlock                # Authenticate (20h session)
+scrt2 run 'cmd $env[KEY]'   # Same injection syntax as scrt
+scrt2 setup-2fa agent       # AI agent setup (non-interactive)
+scrt2 help                  # Full command list
+```
+
+scrt2 has its own `CLAUDE.md` and `SECURITY.md` in its repo root.
+CLAUDEEOF
+        echo "Added scrt2 section to existing ~/.claude/CLAUDE.md"
+
+    else
+        echo "~/.claude/CLAUDE.md already has scrt2 section"
+    fi
+}
+
+# Only set up Claude Code if claude directory exists or Claude Code is installed
+if command -v claude &>/dev/null || [ -d "$HOME/.claude" ]; then
+    setup_claude_code
+fi

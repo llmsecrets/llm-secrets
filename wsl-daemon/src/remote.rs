@@ -350,7 +350,7 @@ pub fn save_config(config: &RemoteConfig) -> Result<(), std::io::Error> {
 fn get_config_path() -> std::path::PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
     std::path::PathBuf::from(home)
-        .join(".scrt")
+        .join(".scrt2")
         .join("remote-config.json")
 }
 

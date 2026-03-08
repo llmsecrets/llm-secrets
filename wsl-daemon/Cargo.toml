@@ -17,9 +17,10 @@ hex = "0.4"
 rand = "0.8"
 aes = "0.8"
 cbc = { version = "0.1", features = ["alloc"] }
+totp-rs = { version = "5", features = ["gen_secret", "otpauth"] }
 
 [[bin]]
-name = "scrt-daemon"
+name = "scrt2-daemon"
 path = "src/main.rs"
 
 [dev-dependencies]
