@@ -599,9 +599,10 @@ cmd_view() {
 
         # Show code and entry in a single dialog
         local user_code
-        user_code=$(zenity --entry --title="Scrt2 - Verification" \
-            --text="Your verification code:\n\n          $code\n\nType the code above to reveal secrets:" \
-            --width=400 2>/dev/null) || return 1
+        user_code=$(zenity --forms --title="Scrt2 - Verification" \
+            --text="<span font='18'>Your verification code:</span>\n\n<span font='48' weight='bold'>    $code    </span>\n\n<span font='12'>Type the code above to reveal secrets</span>" \
+            --add-entry="Code" \
+            --width=450 2>/dev/null) || return 1
 
         # Phase 2: Confirm with code
         response=$(send_request "{\"method\":\"reveal_all_confirm\",\"params\":{\"challenge\":\"$challenge\",\"code\":\"$user_code\"}}")
