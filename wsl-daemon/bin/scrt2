@@ -616,6 +616,13 @@ cmd_view() {
 
         success=$(echo "$response" | jq -r '.success // false')
         if [ "$success" = "true" ]; then
+            local count=$(echo "$response" | jq -r '.data.secrets | length // 0')
+            if [ "$count" -eq 0 ] 2>/dev/null; then
+                zenity --info --title="LLM Secrets" \
+                    --text="No secrets stored.\n\nAdd with: scrt2 add KEY=value" \
+                    --width=350 2>/dev/null
+                return 0
+            fi
             local secrets=$(echo "$response" | jq -r '.data.secrets | to_entries[] | "\(.key)=\(.value)"')
             zenity --text-info --title="LLM Secrets — View All" \
                 --editable --width=800 --height=600 \
@@ -1913,6 +1920,7 @@ cmd_menu() {
         return
     fi
 
+  while true; do
     # Get live status for the header
     local status_line="Inactive"
     local status_color="#f59e0b"
@@ -1960,9 +1968,9 @@ cmd_menu() {
         "logout" "Clear session" \
         --ok-label="  Run  " \
         --cancel-label="  ✕  Close  " \
-        --width=480 --height=520 2>/dev/null) || return 0
+        --width=480 --height=520 2>/dev/null) || break
 
-    [ -z "$choice" ] && return 0
+    [ -z "$choice" ] && break
 
     # Handle commands that need follow-up input
     case "$choice" in
@@ -1973,8 +1981,8 @@ cmd_menu() {
                 --text="<span font='14' weight='bold'>Run command with secrets</span>\n\n<span font='11' color='#64748b'>Use \$env[NAME] for secret injection</span>\n" \
                 --entry-text='echo "$env[SECRET_NAME]"' \
                 --ok-label="  Execute  " \
-                --width=500 2>/dev/null) || return 0
-            [ -z "$cmd" ] && return 0
+                --width=500 2>/dev/null) || continue
+            [ -z "$cmd" ] && continue
             echo -e "${CYAN}Running: ${cmd}${NC}"
             cmd_run "$cmd"
             ;;
@@ -1982,8 +1990,8 @@ cmd_menu() {
             local dest
             dest=$(zenity --file-selection \
                 --title="Choose backup destination" \
-                --directory 2>/dev/null) || return 0
-            [ -z "$dest" ] && return 0
+                --directory 2>/dev/null) || continue
+            [ -z "$dest" ] && continue
             cmd_backup_vault --local "$dest"
             ;;
         "backup-key --save")
@@ -1991,8 +1999,8 @@ cmd_menu() {
             local save_dest
             save_dest=$(zenity --file-selection \
                 --title="LLM Secrets — Choose Backup Destination" \
-                --directory 2>/dev/null) || return 0
-            [ -z "$save_dest" ] && return 0
+                --directory 2>/dev/null) || continue
+            [ -z "$save_dest" ] && continue
 
             # Retrieve master key from daemon first
             echo -e "${CYAN}Retrieving master key from daemon...${NC}"
@@ -2004,7 +2012,7 @@ cmd_menu() {
                 zenity --error --title="LLM Secrets" \
                     --text="Failed to retrieve master key:\n${bk_error}" \
                     --width=400 2>/dev/null
-                return 1
+                continue
             fi
             local bk_key=$(echo "$bk_response" | jq -r '.data.key')
 
@@ -2017,8 +2025,8 @@ cmd_menu() {
                 --add-password="Confirm password" \
                 --ok-label="  Encrypt & Save  " \
                 --cancel-label="  Cancel  " \
-                --width=460 2>/dev/null) || return 0
-            [ -z "$pw_result" ] && return 0
+                --width=460 2>/dev/null) || continue
+            [ -z "$pw_result" ] && continue
 
             local pw1 pw2
             pw1=$(echo "$pw_result" | cut -d'|' -f1)
@@ -2028,13 +2036,13 @@ cmd_menu() {
                 zenity --error --title="LLM Secrets" \
                     --text="Passwords do not match. No file was created." \
                     --width=350 2>/dev/null
-                return 1
+                continue
             fi
             if [ ${#pw1} -lt 8 ]; then
                 zenity --error --title="LLM Secrets" \
                     --text="Password must be at least 8 characters. No file was created." \
                     --width=350 2>/dev/null
-                return 1
+                continue
             fi
 
             # Encrypt and save
@@ -2099,7 +2107,7 @@ BKPYEOF
             if [ $bk_rc -ne 0 ] || [ "$bk_result" != "OK" ]; then
                 zenity --error --title="LLM Secrets" \
                     --text="Encryption failed." --width=300 2>/dev/null
-                return 1
+                continue
             fi
 
             # Generate recovery instructions readme
@@ -2189,8 +2197,25 @@ GUIREADMEEOF
             echo -e "${CYAN}scrt2 ${choice}${NC}"
             case "$choice" in
                 unlock)     cmd_unlock ;;
-                status)     cmd_status ;;
-                list)       cmd_list ;;
+                status)
+                    local status_out
+                    status_out=$(cmd_status 2>&1)
+                    zenity --info --title="LLM Secrets — Status" \
+                        --text="$status_out" --width=400 2>/dev/null || true
+                    ;;
+                list)
+                    local list_out
+                    list_out=$(cmd_list 2>&1)
+                    if [ -z "$list_out" ]; then
+                        zenity --info --title="LLM Secrets — Secret Names" \
+                            --text="No secrets stored.\n\nAdd with: scrt2 add KEY=value" \
+                            --width=350 2>/dev/null
+                    else
+                        zenity --text-info --title="LLM Secrets — Secret Names" \
+                            --width=500 --height=400 --font="monospace" \
+                            <<< "$list_out" 2>/dev/null || true
+                    fi
+                    ;;
                 view)       cmd_view ;;
                 add)        cmd_add ;;
                 backup-vault) cmd_backup_vault ;;
@@ -2205,6 +2230,7 @@ GUIREADMEEOF
             esac
             ;;
     esac
+  done
 }
 
 cmd_help() {
