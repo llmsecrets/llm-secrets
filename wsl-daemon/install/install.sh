@@ -122,7 +122,15 @@ chmod +x ~/.local/bin/scrt-daemon
 chmod +x ~/.local/bin/scrt-client
 chmod +x ~/.local/bin/scrt
 
-# Ensure LF line endings on shell script (in case of Windows checkout)
+# Install scrt2 CLI wrapper
+SCRT2_SCRIPT="$PROJECT_DIR/bin/scrt2"
+if [ -f "$SCRT2_SCRIPT" ]; then
+    cp "$SCRT2_SCRIPT" ~/.local/bin/scrt2
+    chmod +x ~/.local/bin/scrt2
+    sed -i 's/\r$//' ~/.local/bin/scrt2
+fi
+
+# Ensure LF line endings on shell scripts (in case of Windows checkout)
 sed -i 's/\r$//' ~/.local/bin/scrt
 
 # Install man page
@@ -158,6 +166,7 @@ echo "Installed to ~/.local/bin:"
 echo "  - scrt-daemon  (background daemon)"
 echo "  - scrt-client  (low-level client)"
 echo "  - scrt         (CLI wrapper)"
+echo "  - scrt2        (CLI wrapper - TOTP edition)"
 echo ""
 echo "Daemon status:"
 systemctl --user status scrt-daemon --no-pager || true
