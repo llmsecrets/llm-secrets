@@ -1,5 +1,5 @@
-// wsl2-daemon/src/audit.rs
-//! Security audit logging for the WSL2 daemon
+// scrt3/src/audit.rs
+//! Security audit logging for the scrt3 daemon
 //!
 //! Provides structured logging of all security-relevant events:
 //! - Session lifecycle (start, end, timeout)
@@ -26,7 +26,7 @@ pub enum EventType {
     SessionEnd,
     /// Session expired due to TTL
     SessionTimeout,
-    /// Windows Hello authentication attempted
+    /// Authentication attempted
     AuthAttempt,
     /// Authentication succeeded
     AuthSuccess,
@@ -66,10 +66,6 @@ pub enum EventType {
     TfaUnlockDisabled,
     /// 2FA re-enabled for unlock operations
     TfaUnlockEnabled,
-    /// All secrets revealed via TOTP
-    TfaRevealAll,
-    /// Single secret revealed via TOTP
-    TfaReveal,
     /// Daemon started
     DaemonStart,
     /// Daemon stopped
@@ -316,7 +312,7 @@ impl AuditLogger {
     pub fn new(log_dir: Option<PathBuf>) -> Self {
         let log_dir = log_dir.unwrap_or_else(|| {
             let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-            PathBuf::from(home).join(".scrt2").join("audit")
+            PathBuf::from(home).join(".scrt3").join("audit")
         });
 
         // Ensure directory exists

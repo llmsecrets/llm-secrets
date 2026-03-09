@@ -1,4 +1,4 @@
-// wsl2-helper/scrt-client/src/main.rs
+// scrt3/scrt-client/src/main.rs
 use std::env;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
@@ -6,10 +6,10 @@ use std::path::PathBuf;
 
 fn get_socket_path() -> PathBuf {
     if let Ok(runtime_dir) = env::var("XDG_RUNTIME_DIR") {
-        PathBuf::from(runtime_dir).join("scrt2.sock")
+        PathBuf::from(runtime_dir).join("scrt3.sock")
     } else {
         let uid = unsafe { libc::getuid() };
-        PathBuf::from(format!("/tmp/scrt2-{}.sock", uid))
+        PathBuf::from(format!("/tmp/scrt3-{}.sock", uid))
     }
 }
 
@@ -30,11 +30,11 @@ fn send_request(request: &serde_json::Value) -> Result<serde_json::Value, String
 }
 
 fn print_usage() {
-    eprintln!("Usage: scrt-client <command> [args...]");
+    eprintln!("Usage: scrt3-client <command> [args...]");
     eprintln!();
     eprintln!("Commands:");
     eprintln!("  store <ttl>      - Read JSON {{token, secrets}} from stdin");
-    eprintln!("  unlock <ttl> <totp_code> - Unlock secrets with TOTP code");
+    eprintln!("  unlock <ttl> <passphrase> [totp_code] - Unlock secrets with passphrase");
     eprintln!("  clear            - Clear session");
     eprintln!("  status           - Check session status");
     eprintln!("  list             - List secret names");
@@ -79,19 +79,25 @@ fn main() {
 
         "unlock" => {
             if args.len() < 4 {
-                eprintln!("ERROR: TTL and TOTP code required");
-                eprintln!("Usage: scrt-client unlock <ttl> <totp_code>");
+                eprintln!("ERROR: TTL and passphrase required");
+                eprintln!("Usage: scrt3-client unlock <ttl> <passphrase> [totp_code]");
                 std::process::exit(1);
             }
             let ttl: u64 = args[2].parse().unwrap_or(7200);
-            let totp_code = &args[3];
+            let passphrase = &args[3];
+            let totp_code = args.get(4).map(|s| s.as_str());
+
+            let mut params = serde_json::json!({
+                "ttl": ttl,
+                "passphrase": passphrase
+            });
+            if let Some(code) = totp_code {
+                params["totp_code"] = serde_json::json!(code);
+            }
 
             send_request(&serde_json::json!({
                 "method": "unlock",
-                "params": {
-                    "ttl": ttl,
-                    "totp_code": totp_code
-                }
+                "params": params
             }))
         }
 

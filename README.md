@@ -119,6 +119,18 @@ llm-secrets/
 └── disaster-recovery/    # Recovery scripts
 ```
 
+## Version Security Model
+
+| Version | Platform | Agent Protection | Human Protection | Notes |
+|---------|----------|:---:|:---:|-------|
+| **scrt** (v1) | Windows/macOS | Yes | Yes | Biometric auth (Windows Hello / Touch ID). Hardware-backed key protection. |
+| **scrt2** | WSL/Linux | Yes | -- | TOTP (Google Authenticator). GUI-gated reveals, subprocess-only injection. |
+| **scrt3** | WSL/Linux | Yes | -- | Same agent protection as scrt2. Non-interactive setup for mobile/server/cross-platform access. |
+| **scrt4** *(planned)* | Cross-platform | Yes | Yes | FIDO2 `hmac-secret`. Hardware-bound key (YubiKey/passkey). Mobile access via caBLE/hybrid. |
+
+- **Agent protection** = AI coding assistant cannot read secret values
+- **Human protection** = at-rest encryption resilient to local access
+
 ## Security
 
 ### Windows

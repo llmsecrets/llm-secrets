@@ -1,0 +1,2491 @@
+#!/bin/bash
+# scrt3 - WSL2 secure secret injector CLI (TOTP edition)
+# Wrapper for scrt3-daemon via Unix socket
+
+set -euo pipefail
+
+VERSION="0.1.0"
+SOCKET="${XDG_RUNTIME_DIR:-/tmp}/scrt3.sock"
+CLIENT="scrt3-client"
+TOTP_SECRET_FILE="$HOME/.scrt3/totp.secret"
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+CYAN='\033[0;36m'
+NC='\033[0m'
+
+send_request() {
+    local json="$1"
+    if command -v socat &>/dev/null; then
+        echo "$json" | socat - UNIX-CONNECT:"$SOCKET" 2>/dev/null
+    elif command -v nc &>/dev/null; then
+        echo "$json" | nc -U -w 2 "$SOCKET" 2>/dev/null
+    else
+        echo '{"success":false,"error":"No socket client (socat or nc) found"}'
+    fi
+}
+
+# Compute TOTP code from stored secret using Python3 stdlib
+compute_totp() {
+    if [ ! -f "$TOTP_SECRET_FILE" ]; then
+        echo -e "${RED}TOTP not configured. Run 'scrt3 setup-totp' first.${NC}" >&2
+        return 1
+    fi
+
+    local secret
+    secret=$(cat "$TOTP_SECRET_FILE")
+
+    python3 -c "
+import hmac, hashlib, struct, time, base64
+
+secret_b32 = '$secret'.strip()
+# Decode base32 secret (add padding if needed)
+padding = '=' * ((8 - len(secret_b32) % 8) % 8)
+key = base64.b32decode(secret_b32 + padding, casefold=True)
+
+# TOTP: current time step
+counter = int(time.time()) // 30
+msg = struct.pack('>Q', counter)
+
+# HMAC-SHA1
+h = hmac.new(key, msg, hashlib.sha1).digest()
+
+# Dynamic truncation
+offset = h[-1] & 0x0F
+code = struct.unpack('>I', h[offset:offset+4])[0] & 0x7FFFFFFF
+code = code % 10**6
+
+print(f'{code:06d}')
+"
+}
+
+cmd_unlock() {
+    local ttl="${1:-72000}"
+    local totp_code="${2:-}"
+    local passphrase=""
+
+    # Check 2FA unlock state
+    local tfa_response
+    tfa_response=$(send_request '{"method":"check_tfa_state"}')
+    local tfa_enabled=$(echo "$tfa_response" | jq -r '.data.unlock_enabled // false')
+
+    if [ "$tfa_enabled" = "true" ]; then
+        # 2FA enabled for unlock — require Google Auth code + passphrase
+        if [ -z "$totp_code" ]; then
+            if command -v zenity &>/dev/null; then
+                totp_code=$(zenity --entry --title="LLM Secrets — Unlock" \
+                    --text="Enter your Google Authenticator code:" \
+                    --width=300 2>/dev/null) || return 1
+            else
+                echo -n "Enter 2FA code: "
+                read -r totp_code
+            fi
+        fi
+    else
+        # 2FA disabled — GUI challenge to prove user presence
+        if command -v zenity &>/dev/null; then
+            local challenge_code=$(printf '%06d' $((RANDOM % 1000000)))
+
+            local user_code
+            user_code=$(zenity --forms --title="LLM Secrets — Verify" \
+                --text="<span font='18'>Your verification code:</span>\n\n<span font='48' weight='bold'>    $challenge_code    </span>\n\n<span font='12'>Type the code above to unlock</span>" \
+                --add-entry="Code" \
+                --width=450 2>/dev/null) || return 1
+
+            if [ "$user_code" != "$challenge_code" ]; then
+                echo -e "${RED}Incorrect verification code.${NC}" >&2
+                return 1
+            fi
+        fi
+    fi
+
+    # Always prompt for passphrase
+    if command -v zenity &>/dev/null; then
+        passphrase=$(zenity --password --title="LLM Secrets — Unlock" \
+            --width=300 2>/dev/null) || return 1
+    else
+        echo -n "Enter passphrase: "
+        read -rs passphrase
+        echo
+    fi
+
+    # Build JSON request
+    local json_params="\"ttl\":$ttl,\"passphrase\":\"$(printf '%s' "$passphrase" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read())[1:-1],end="")')\""
+    if [ -n "$totp_code" ]; then
+        json_params+=",\"totp_code\":\"$totp_code\""
+    fi
+
+    local response
+    response=$(send_request "{\"method\":\"unlock\",\"params\":{$json_params}}")
+
+    local success=$(echo "$response" | jq -r '.success // false')
+    if [ "$success" = "true" ]; then
+        local count=$(echo "$response" | jq -r '.data.count // 0')
+        echo -e "${GREEN}Unlocked ${count} secret(s).${NC}"
+    else
+        local error=$(echo "$response" | jq -r '.error // "Unknown error"')
+        echo -e "${RED}Unlock failed: ${error}${NC}" >&2
+        return 1
+    fi
+}
+
+cmd_status() {
+    local response
+    response=$(send_request '{"method":"status"}')
+
+    local active=$(echo "$response" | jq -r '.data.active // false')
+    local remaining=$(echo "$response" | jq -r '.data.remaining // 0')
+
+    if [ "$active" = "true" ]; then
+        if [ "$remaining" -lt 0 ] 2>/dev/null; then
+            echo -e "${GREEN}Session active (no expiry)${NC}"
+        else
+            local mins=$((remaining / 60))
+            local secs=$((remaining % 60))
+            echo -e "${GREEN}Session active. Expires in ${mins}m ${secs}s.${NC}"
+        fi
+    else
+        echo -e "${YELLOW}Session inactive. Run 'scrt3 unlock' to authenticate.${NC}"
+    fi
+}
+
+cmd_list() {
+    local response
+    response=$(send_request '{"method":"list"}')
+
+    local success=$(echo "$response" | jq -r '.success // false')
+    if [ "$success" = "true" ]; then
+        echo "$response" | jq -r '.data.names[]' 2>/dev/null
+    else
+        local error=$(echo "$response" | jq -r '.error // "Unknown error"')
+        echo -e "${RED}${error}${NC}" >&2
+        return 1
+    fi
+}
+
+cmd_run() {
+    if [ $# -eq 0 ]; then
+        echo -e "${RED}Usage: scrt3 run <command>${NC}" >&2
+        return 1
+    fi
+
+    # Use scrt3-client for run (handles exit codes and streaming properly)
+    "$CLIENT" run "$@"
+}
+
+cmd_logout() {
+    local response
+    response=$(send_request '{"method":"clear"}')
+
+    local success=$(echo "$response" | jq -r '.success // false')
+    if [ "$success" = "true" ]; then
+        echo -e "${GREEN}Session cleared.${NC}"
+    else
+        echo -e "${RED}Failed to clear session.${NC}" >&2
+        return 1
+    fi
+}
+
+cmd_check_totp() {
+    local response
+    response=$(send_request '{"method":"check_totp"}')
+
+    local configured=$(echo "$response" | jq -r '.data.configured // false')
+    if [ "$configured" = "true" ]; then
+        echo -e "${GREEN}TOTP is configured.${NC}"
+    else
+        echo -e "${YELLOW}TOTP is not configured. Run 'scrt3 setup-totp' to set up.${NC}"
+    fi
+}
+
+flush_setup_traces() {
+    # 1. Flush audit logs
+    local audit_dir="$HOME/.scrt3/audit"
+    if [ -d "$audit_dir" ]; then
+        local today_log
+        today_log=$(ls -t "$audit_dir"/*.jsonl 2>/dev/null | head -1)
+        if [ -n "$today_log" ]; then
+            > "$today_log"
+        fi
+    fi
+
+    # 2. Scrub bash/zsh history
+    history -d "$(history 1 | awk '{print $1}')" 2>/dev/null || true
+    if [ -f "$HOME/.bash_history" ]; then
+        sed -i '/setup-2fa/d' "$HOME/.bash_history" 2>/dev/null || true
+    fi
+    if [ -f "$HOME/.zsh_history" ]; then
+        sed -i '/setup-2fa/d' "$HOME/.zsh_history" 2>/dev/null || true
+    fi
+
+    # 3. Clean up temp files
+    rm -f /tmp/scrt3-qr-* 2>/dev/null || true
+
+    # 4. Scrub Claude Code session transcripts (redact the exact TOTP seed)
+    if [ -f "$TOTP_SECRET_FILE" ]; then
+        local seed
+        seed=$(cat "$TOTP_SECRET_FILE" 2>/dev/null)
+        if [ -n "$seed" ] && [ ${#seed} -ge 16 ]; then
+            local claude_proj_dir="$HOME/.claude/projects"
+            if [ -d "$claude_proj_dir" ]; then
+                find "$claude_proj_dir" -name '*.jsonl' -mmin -120 2>/dev/null | while read -r transcript; do
+                    if grep -qF "$seed" "$transcript" 2>/dev/null; then
+                        sed -i "s/${seed}/[TOTP_REDACTED]/g" "$transcript" 2>/dev/null || true
+                    fi
+                done
+            fi
+            seed="[CLEARED]"
+        fi
+    fi
+}
+
+cmd_setup_2fa() {
+    local mode="${1:-agent}"
+
+    # Ensure config directory exists
+    mkdir -p "$(dirname "$TOTP_SECRET_FILE")"
+    chmod 700 "$(dirname "$TOTP_SECRET_FILE")"
+
+    # ── Warning: check for existing secrets before key regeneration ──
+    local _existing_secrets=0
+    local _list_resp
+    _list_resp=$(send_request '{"method":"list"}' 2>/dev/null) && {
+        _existing_secrets=$(echo "$_list_resp" | jq -r '.data.names | length // 0' 2>/dev/null)
+    }
+    # Fallback: check vault files on disk if daemon isn't unlocked
+    if [ "$_existing_secrets" -eq 0 ] 2>/dev/null; then
+        if [ -f "$HOME/.scrt3/vault/secrets.enc" ]; then
+            _existing_secrets=1
+        fi
+    fi
+
+    if [ "$_existing_secrets" -gt 0 ] 2>/dev/null; then
+        echo ""
+        echo -e "${RED}╔══════════════════════════════════════════════════════════╗${NC}"
+        echo -e "${RED}║  WARNING: You have existing secrets in your vault!      ║${NC}"
+        echo -e "${RED}╠══════════════════════════════════════════════════════════╣${NC}"
+        echo -e "${RED}║  Setting up 2FA generates new encryption keys.          ║${NC}"
+        echo -e "${RED}║  ALL existing secrets will be permanently deleted.      ║${NC}"
+        echo -e "${RED}╠══════════════════════════════════════════════════════════╣${NC}"
+        echo -e "${RED}║  Before proceeding, you should:                         ║${NC}"
+        echo -e "${RED}║    1. Run 'scrt3 backup-key --save ~/Desktop'           ║${NC}"
+        echo -e "${RED}║       (saves encrypted master key backup)               ║${NC}"
+        echo -e "${RED}║    2. Run 'scrt3 view' and copy your secret values      ║${NC}"
+        echo -e "${RED}║    3. After setup, re-add with 'scrt3 add KEY=value'    ║${NC}"
+        echo -e "${RED}╚══════════════════════════════════════════════════════════╝${NC}"
+        echo ""
+        echo -n "Type YES to proceed, or anything else to abort: "
+        read -r _confirm
+        if [ "$_confirm" != "YES" ]; then
+            echo -e "${YELLOW}Aborted. Your secrets are safe.${NC}"
+            return 0
+        fi
+        echo ""
+    fi
+
+    case "$mode" in
+        manual)
+            # ── Manual entry: user pastes base32 secret directly ──
+            # Input is hidden (not echoed). Visible in process memory briefly
+            # but never in stdout. Flushed from logs/history after.
+            echo -e "${CYAN}Paste your TOTP base32 secret below (input is hidden):${NC}"
+            local secret
+            IFS= read -rs secret
+            echo ""
+
+            if [ -z "$secret" ]; then
+                echo -e "${RED}No secret entered.${NC}" >&2
+                return 1
+            fi
+
+            # Normalize: strip whitespace/dashes, uppercase
+            secret=$(echo "$secret" | tr -d ' -' | tr '[:lower:]' '[:upper:]')
+
+            # Write to disk
+            echo -n "$secret" > "$TOTP_SECRET_FILE"
+            chmod 600 "$TOTP_SECRET_FILE"
+            secret="[CLEARED]"
+
+            echo -e "${GREEN}Secret saved to $TOTP_SECRET_FILE${NC}"
+
+            # Verify
+            echo -n "Enter a 6-digit TOTP code from your authenticator to verify: "
+            read -r verify_code
+
+            local verify_response
+            verify_response=$(send_request "{\"method\":\"verify_totp_setup\",\"params\":{\"code\":\"$verify_code\"}}")
+
+            local verify_success=$(echo "$verify_response" | jq -r '.success // false')
+            if [ "$verify_success" = "true" ]; then
+                echo -e "${GREEN}2FA setup verified successfully!${NC}"
+            else
+                local error=$(echo "$verify_response" | jq -r '.error // "Unknown error"')
+                echo -e "${RED}Verification failed: ${error}${NC}" >&2
+                echo -e "${YELLOW}Secret saved. Re-run 'scrt3 setup-2fa' to retry verification.${NC}"
+                flush_setup_traces
+                return 1
+            fi
+
+            # Generate fresh encryption keys (new auth = new keys)
+            echo -e "${CYAN}Generating fresh encryption keys...${NC}"
+            echo -e "${YELLOW}Choose a passphrase to protect your master key.${NC}"
+            local setup_passphrase setup_passphrase2
+            read -rs -p "Vault passphrase (min 8 chars): " setup_passphrase
+            echo
+            read -rs -p "Confirm passphrase: " setup_passphrase2
+            echo
+            if [ "$setup_passphrase" != "$setup_passphrase2" ]; then
+                echo -e "${RED}Passphrases do not match.${NC}" >&2
+                flush_setup_traces
+                return 1
+            fi
+            if [ ${#setup_passphrase} -lt 8 ]; then
+                echo -e "${RED}Passphrase must be at least 8 characters.${NC}" >&2
+                flush_setup_traces
+                return 1
+            fi
+            local escaped_pp
+            escaped_pp=$(printf '%s' "$setup_passphrase" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read())[1:-1],end="")')
+            local init_response
+            init_response=$(send_request "{\"method\":\"initialize_keys\",\"params\":{\"passphrase\":\"$escaped_pp\"}}")
+            local init_success=$(echo "$init_response" | jq -r '.success // false')
+            if [ "$init_success" = "true" ]; then
+                echo -e "${GREEN}Fresh master key generated and protected with passphrase.${NC}"
+                echo -e "${GREEN}Empty secret store created.${NC}"
+                echo -e "${CYAN}Add secrets with: scrt3 add KEY=value${NC}"
+            else
+                local init_error=$(echo "$init_response" | jq -r '.error // "Unknown error"')
+                echo -e "${RED}Key generation failed: ${init_error}${NC}" >&2
+                flush_setup_traces
+                return 1
+            fi
+
+            flush_setup_traces
+            echo -e "${CYAN}Audit logs and shell history flushed.${NC}"
+            echo ""
+            echo -e "${YELLOW}Tip: 2FA is mainly useful for remote access (e.g. Claude Code from your phone).${NC}"
+            echo -e "${YELLOW}For local use, you can disable it:  scrt3 2fa-off${NC}"
+            ;;
+
+        qr)
+            # ── QR mode: daemon generates secret, QR shown as text in zenity ──
+            if ! command -v zenity &>/dev/null; then
+                echo -e "${RED}zenity required for QR mode. Use 'scrt3 setup-2fa manual' instead.${NC}" >&2
+                return 1
+            fi
+            if ! command -v qrencode &>/dev/null; then
+                echo -e "${RED}qrencode required. Install: sudo apt install qrencode${NC}" >&2
+                echo -e "${YELLOW}Or use: scrt3 setup-2fa manual${NC}"
+                return 1
+            fi
+
+            # Ask daemon to generate and save secret to disk
+            local response
+            response=$(send_request '{"method":"setup_totp"}')
+
+            local success=$(echo "$response" | jq -r '.success // false')
+            if [ "$success" != "true" ]; then
+                local error=$(echo "$response" | jq -r '.error // "Unknown error"')
+                echo -e "${RED}Setup failed: ${error}${NC}" >&2
+                return 1
+            fi
+
+            if [ ! -f "$TOTP_SECRET_FILE" ]; then
+                echo -e "${RED}TOTP secret file not found.${NC}" >&2
+                return 1
+            fi
+
+            # Read from disk, build QR — secret only in bash vars + temp file
+            local secret otpauth_uri setup_ts acct_label
+            secret=$(cat "$TOTP_SECRET_FILE")
+            setup_ts=$(date '+%Y-%m-%d %H:%M')
+            acct_label="LLM Secrets: ${setup_ts}"
+            otpauth_uri="otpauth://totp/$(python3 -c "import urllib.parse; print(urllib.parse.quote('${acct_label}'))")?secret=${secret}&issuer=LLM%20Secrets&algorithm=SHA1&digits=6&period=30"
+
+            # Generate UTF8 QR text file and show in zenity --text-info
+            local qr_txt
+            qr_txt=$(mktemp /tmp/scrt3-qr-XXXXXX.txt)
+            {
+                echo "══════════════════════════════════════════"
+                echo "  Scan with Google Authenticator"
+                echo "  (maximize this window for full QR)"
+                echo "══════════════════════════════════════════"
+                echo ""
+                qrencode -t UTF8 "$otpauth_uri"
+                echo ""
+                echo "══════════════════════════════════════════"
+                echo "  Manual entry secret (base32):"
+                echo ""
+                echo "  $secret"
+                echo "══════════════════════════════════════════"
+            } > "$qr_txt"
+
+            zenity --text-info --title="LLM Secrets — 2FA Setup (maximize for full QR)" \
+                --filename="$qr_txt" \
+                --editable \
+                --font="monospace 14" \
+                --width=700 --height=700 >/dev/null 2>/dev/null || true
+
+            rm -f "$qr_txt"
+            secret="[CLEARED]"
+            otpauth_uri="[CLEARED]"
+            response="[CLEARED]"
+
+            echo -e "${CYAN}Secret shown in GUI only.${NC}"
+
+            # Verify
+            echo -n "Enter a 6-digit TOTP code from your authenticator to verify: "
+            read -r verify_code
+
+            local verify_response2
+            verify_response2=$(send_request "{\"method\":\"verify_totp_setup\",\"params\":{\"code\":\"$verify_code\"}}")
+
+            local verify_success2=$(echo "$verify_response2" | jq -r '.success // false')
+            if [ "$verify_success2" = "true" ]; then
+                echo -e "${GREEN}2FA setup verified successfully!${NC}"
+            else
+                local error2=$(echo "$verify_response2" | jq -r '.error // "Unknown error"')
+                echo -e "${RED}Verification failed: ${error2}${NC}" >&2
+                echo -e "${YELLOW}Secret saved. Re-run 'scrt3 setup-2fa' to retry verification.${NC}"
+                flush_setup_traces
+                return 1
+            fi
+
+            # Generate fresh encryption keys (new auth = new keys)
+            echo -e "${CYAN}Generating fresh encryption keys...${NC}"
+            echo -e "${YELLOW}Choose a passphrase to protect your master key.${NC}"
+            local setup_passphrase2a setup_passphrase2b
+            read -rs -p "Vault passphrase (min 8 chars): " setup_passphrase2a
+            echo
+            read -rs -p "Confirm passphrase: " setup_passphrase2b
+            echo
+            if [ "$setup_passphrase2a" != "$setup_passphrase2b" ]; then
+                echo -e "${RED}Passphrases do not match.${NC}" >&2
+                flush_setup_traces
+                return 1
+            fi
+            if [ ${#setup_passphrase2a} -lt 8 ]; then
+                echo -e "${RED}Passphrase must be at least 8 characters.${NC}" >&2
+                flush_setup_traces
+                return 1
+            fi
+            local escaped_pp2
+            escaped_pp2=$(printf '%s' "$setup_passphrase2a" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read())[1:-1],end="")')
+            local init_response2
+            init_response2=$(send_request "{\"method\":\"initialize_keys\",\"params\":{\"passphrase\":\"$escaped_pp2\"}}")
+            local init_success2=$(echo "$init_response2" | jq -r '.success // false')
+            if [ "$init_success2" = "true" ]; then
+                echo -e "${GREEN}Fresh master key generated and protected with passphrase.${NC}"
+                echo -e "${GREEN}Empty secret store created.${NC}"
+                echo -e "${CYAN}Add secrets with: scrt3 add KEY=value${NC}"
+            else
+                local init_error2=$(echo "$init_response2" | jq -r '.error // "Unknown error"')
+                echo -e "${RED}Key generation failed: ${init_error2}${NC}" >&2
+                flush_setup_traces
+                return 1
+            fi
+
+            flush_setup_traces
+            echo -e "${CYAN}Audit logs and shell history flushed.${NC}"
+            echo ""
+            echo -e "${YELLOW}Tip: 2FA is mainly useful for remote access (e.g. Claude Code from your phone).${NC}"
+            echo -e "${YELLOW}For local use, you can disable it:  scrt3 2fa-off${NC}"
+            ;;
+
+        agent)
+            # ── Agent mode: non-interactive, prints secret to stdout ──
+            # Designed for AI agents (Claude Code, etc.) that can't do interactive input.
+            # Secret is printed as plaintext — agent shows it to user for phone setup.
+            # Verification is automatic (compute_totp reads from disk).
+
+            # Step 1: Generate and save TOTP secret
+            local response
+            response=$(send_request '{"method":"setup_totp"}')
+            local success=$(echo "$response" | jq -r '.success // false')
+            if [ "$success" != "true" ]; then
+                local error=$(echo "$response" | jq -r '.error // "Unknown error"')
+                echo -e "${RED}Setup failed: ${error}${NC}" >&2
+                return 1
+            fi
+
+            if [ ! -f "$TOTP_SECRET_FILE" ]; then
+                echo -e "${RED}TOTP secret file not found after generation.${NC}" >&2
+                return 1
+            fi
+
+            # Step 2: Show QR code in terminal for phone scanning
+            local secret
+            secret=$(cat "$TOTP_SECRET_FILE")
+            local setup_ts=$(date '+%Y-%m-%d %H:%M')
+            local acct_label="LLM Secrets: ${setup_ts}"
+            local otpauth_uri="otpauth://totp/$(python3 -c "import urllib.parse; print(urllib.parse.quote('${acct_label}'))")?secret=${secret}&issuer=LLM%20Secrets&algorithm=SHA1&digits=6&period=30"
+
+            echo ""
+            echo -e "${CYAN}Scan this QR code with Google Authenticator:${NC}"
+            echo -e "${YELLOW}If you can't see the full QR code, press Ctrl+O to expand the terminal.${NC}"
+            echo ""
+            if command -v qrencode &>/dev/null; then
+                qrencode -t ANSIUTF8 "$otpauth_uri"
+            else
+                echo -e "${RED}qrencode not installed. Install: sudo apt install qrencode${NC}" >&2
+                echo -e "${YELLOW}Manual entry fallback:${NC}"
+                echo -e "  Account:  ${GREEN}${acct_label}${NC}"
+                echo -e "  Key:      ${GREEN}${secret}${NC}"
+                echo -e "  Type:     Time-based | SHA1 | 6 digits | 30s"
+            fi
+            echo ""
+
+            # Clear secret from memory immediately after QR render
+            secret="[CLEARED]"
+            otpauth_uri="[CLEARED]"
+
+            # Step 3: Wait for user confirmation
+            echo -n "Press Enter after scanning the QR code..."
+            read -r
+
+            # Step 4: Auto-verify using compute_totp (reads secret from disk)
+            echo -e "${CYAN}Verifying TOTP automatically...${NC}"
+            local totp_code
+            totp_code=$(compute_totp) || return 1
+
+            local verify_response
+            verify_response=$(send_request "{\"method\":\"verify_totp_setup\",\"params\":{\"code\":\"$totp_code\"}}")
+            local verify_success=$(echo "$verify_response" | jq -r '.success // false')
+            if [ "$verify_success" = "true" ]; then
+                echo -e "${GREEN}TOTP verified.${NC}"
+            else
+                local error=$(echo "$verify_response" | jq -r '.error // "Unknown error"')
+                echo -e "${RED}Verification failed: ${error}${NC}" >&2
+                flush_setup_traces
+                return 1
+            fi
+
+            # Step 5: Generate fresh encryption keys
+            echo -e "${CYAN}Generating fresh encryption keys...${NC}"
+            echo -e "${YELLOW}Choose a passphrase to protect your master key.${NC}"
+            local setup_passphrase3a setup_passphrase3b
+            read -rs -p "Vault passphrase (min 8 chars): " setup_passphrase3a
+            echo
+            read -rs -p "Confirm passphrase: " setup_passphrase3b
+            echo
+            if [ "$setup_passphrase3a" != "$setup_passphrase3b" ]; then
+                echo -e "${RED}Passphrases do not match.${NC}" >&2
+                flush_setup_traces
+                return 1
+            fi
+            if [ ${#setup_passphrase3a} -lt 8 ]; then
+                echo -e "${RED}Passphrase must be at least 8 characters.${NC}" >&2
+                flush_setup_traces
+                return 1
+            fi
+            local escaped_pp3
+            escaped_pp3=$(printf '%s' "$setup_passphrase3a" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read())[1:-1],end="")')
+            local init_response
+            init_response=$(send_request "{\"method\":\"initialize_keys\",\"params\":{\"passphrase\":\"$escaped_pp3\"}}")
+            local init_success=$(echo "$init_response" | jq -r '.success // false')
+            if [ "$init_success" = "true" ]; then
+                echo -e "${GREEN}Fresh master key generated and protected with passphrase.${NC}"
+                echo -e "${GREEN}Empty secret store created.${NC}"
+                echo -e "${CYAN}Add secrets with: scrt3 add KEY=value${NC}"
+            else
+                local init_error=$(echo "$init_response" | jq -r '.error // "Unknown error"')
+                echo -e "${RED}Key generation failed: ${init_error}${NC}" >&2
+                flush_setup_traces
+                return 1
+            fi
+
+            # Step 6: Flush traces
+            flush_setup_traces
+            echo -e "${CYAN}Audit logs and shell history flushed.${NC}"
+            echo ""
+            echo -e "${YELLOW}Tip: 2FA is mainly useful for remote access (e.g. Claude Code from your phone).${NC}"
+            echo -e "${YELLOW}For local use, you can disable it:  scrt3 2fa-off${NC}"
+            ;;
+
+        *)
+            echo -e "${RED}Unknown mode: $mode${NC}" >&2
+            echo "Usage: scrt3 setup-2fa [manual|qr|agent]"
+            return 1
+            ;;
+    esac
+}
+
+cmd_extend() {
+    local ttl="${1:-}"
+    local json
+    if [ -n "$ttl" ]; then
+        json="{\"method\":\"extend\",\"params\":{\"ttl\":$ttl}}"
+    else
+        json='{"method":"extend"}'
+    fi
+
+    local response
+    response=$(send_request "$json")
+
+    local success=$(echo "$response" | jq -r '.success // false')
+    if [ "$success" = "true" ]; then
+        local remaining=$(echo "$response" | jq -r '.data.remaining // 0')
+        local mins=$((remaining / 60))
+        echo -e "${GREEN}Session extended. ${mins} minutes remaining.${NC}"
+    else
+        local error=$(echo "$response" | jq -r '.error // "Unknown error"')
+        echo -e "${RED}${error}${NC}" >&2
+        return 1
+    fi
+}
+
+cmd_view() {
+    # Check 2FA state from daemon
+    local tfa_response
+    tfa_response=$(send_request '{"method":"check_tfa_state"}')
+    local tfa_enabled=$(echo "$tfa_response" | jq -r '.data.enabled // false')
+
+    if [ "$tfa_enabled" = "true" ]; then
+        # ── 2FA mode: TOTP code replaces GUI challenge ──
+        local totp_code="${1:-}"
+
+        # If TOTP code provided as argument, use it immediately (time-sensitive, 30s window)
+        # Otherwise prompt via GUI or terminal
+        if [ -z "$totp_code" ]; then
+            if command -v zenity &>/dev/null; then
+                totp_code=$(zenity --entry --title="LLM Secrets — 2FA Verify" \
+                    --text="Enter your Google Authenticator code:" \
+                    --width=300 2>/dev/null) || return 1
+            else
+                echo -n "Enter 2FA code: "
+                read -r totp_code
+            fi
+        fi
+
+        local response
+        response=$(send_request "{\"method\":\"reveal_all_totp\",\"params\":{\"totp_code\":\"$totp_code\"}}")
+        local success=$(echo "$response" | jq -r '.success // false')
+
+        if [ "$success" = "true" ]; then
+            local count=$(echo "$response" | jq -r '.data.secrets | length // 0')
+            if [ "$count" -eq 0 ] 2>/dev/null; then
+                echo -e "${YELLOW}No secrets stored. Add with: scrt3 add KEY=value${NC}"
+                return 0
+            fi
+            if ! command -v zenity &>/dev/null; then
+                echo -e "${RED}zenity required to view secrets (secrets are GUI-only, never printed to terminal).${NC}" >&2
+                echo -e "${YELLOW}Install: sudo apt install zenity${NC}"
+                return 1
+            fi
+            local secrets=$(echo "$response" | jq -r '.data.secrets | to_entries[] | "\(.key)=\(.value)"')
+            zenity --text-info --title="LLM Secrets — View All" \
+                --editable --width=800 --height=600 --font="monospace" <<< "$secrets" >/dev/null 2>/dev/null || true
+            secrets="[CLEARED]"
+            response="[CLEARED]"
+        else
+            local error=$(echo "$response" | jq -r '.error // "Unknown error"')
+            echo -e "${RED}${error}${NC}" >&2
+            return 1
+        fi
+    else
+        # ── GUI challenge mode (existing behavior when 2FA is disabled) ──
+        if ! command -v zenity &>/dev/null; then
+            echo -e "${RED}zenity required when 2FA is disabled. Install: sudo apt install zenity${NC}" >&2
+            echo -e "${YELLOW}Or re-enable 2FA: scrt3 2fa-on${NC}"
+            return 1
+        fi
+
+        # Phase 1: Request challenge
+        local response
+        response=$(send_request '{"method":"reveal_all"}')
+
+        local success=$(echo "$response" | jq -r '.success // false')
+        if [ "$success" != "true" ]; then
+            local error=$(echo "$response" | jq -r '.error // "Unknown error"')
+            echo -e "${RED}${error}${NC}" >&2
+            return 1
+        fi
+
+        local challenge=$(echo "$response" | jq -r '.data.challenge')
+        local code=$(echo "$response" | jq -r '.data.code')
+
+        # Show code and entry in a single dialog
+        local user_code
+        user_code=$(zenity --forms --title="LLM Secrets — Verify" \
+            --text="<span font='18'>Your verification code:</span>\n\n<span font='48' weight='bold'>    $code    </span>\n\n<span font='12'>Type the code above to reveal secrets</span>" \
+            --add-entry="Code" \
+            --width=450 2>/dev/null) || return 1
+
+        # Phase 2: Confirm with code
+        response=$(send_request "{\"method\":\"reveal_all_confirm\",\"params\":{\"challenge\":\"$challenge\",\"code\":\"$user_code\"}}")
+
+        success=$(echo "$response" | jq -r '.success // false')
+        if [ "$success" = "true" ]; then
+            local count=$(echo "$response" | jq -r '.data.secrets | length // 0')
+            if [ "$count" -eq 0 ] 2>/dev/null; then
+                zenity --info --title="LLM Secrets" \
+                    --text="No secrets stored.\n\nAdd with: scrt3 add KEY=value" \
+                    --width=350 2>/dev/null
+                return 0
+            fi
+            local secrets=$(echo "$response" | jq -r '.data.secrets | to_entries[] | "\(.key)=\(.value)"')
+            zenity --text-info --title="LLM Secrets — View All" \
+                --editable --width=800 --height=600 \
+                --font="monospace" \
+                <<< "$secrets" >/dev/null 2>/dev/null || true
+            secrets="[CLEARED]"
+            response="[CLEARED]"
+        else
+            local error=$(echo "$response" | jq -r '.error // "Unknown error"')
+            zenity --error --text="$error" 2>/dev/null
+            return 1
+        fi
+    fi
+}
+
+cmd_2fa_off() {
+    local unlock_only=false
+    if [ "${1:-}" = "--unlock" ]; then
+        unlock_only=true
+        shift
+    fi
+
+    local totp_code="${1:-}"
+
+    local label="view"
+    [ "$unlock_only" = true ] && label="unlock"
+
+    if [ -z "$totp_code" ]; then
+        if command -v zenity &>/dev/null; then
+            totp_code=$(zenity --entry --title="LLM Secrets — Disable 2FA (${label})" \
+                --text="Enter your Google Authenticator code to disable 2FA for ${label}:" \
+                --width=300 2>/dev/null) || return 1
+        else
+            echo -n "Enter 2FA code to disable (${label}): "
+            read -r totp_code
+        fi
+    fi
+
+    local method="disable_tfa"
+    [ "$unlock_only" = true ] && method="disable_tfa_unlock"
+
+    local response
+    response=$(send_request "{\"method\":\"${method}\",\"params\":{\"totp_code\":\"$totp_code\"}}")
+    local success=$(echo "$response" | jq -r '.success // false')
+
+    if [ "$success" = "true" ]; then
+        echo -e "${GREEN}2FA disabled for ${label}.${NC}"
+        if [ "$unlock_only" = true ]; then
+            echo -e "${YELLOW}Unlock no longer requires Google Auth code.${NC}"
+            echo -e "${YELLOW}Re-enable with: scrt3 2fa-on --unlock${NC}"
+        else
+            echo -e "${YELLOW}View no longer requires Google Auth code.${NC}"
+            echo -e "${YELLOW}View will use GUI challenge. Re-enable with: scrt3 2fa-on${NC}"
+        fi
+        # Confirm session is still active
+        local status_response
+        status_response=$(send_request '{"method":"status"}')
+        local active=$(echo "$status_response" | jq -r '.data.active // false')
+        if [ "$active" = "true" ]; then
+            local remaining=$(echo "$status_response" | jq -r '.data.remaining // 0')
+            local mins=$((remaining / 60))
+            echo -e "${GREEN}Session still active (${mins}m remaining).${NC}"
+        fi
+    else
+        local error=$(echo "$response" | jq -r '.error // "Unknown error"')
+        echo -e "${RED}${error}${NC}" >&2
+        return 1
+    fi
+}
+
+cmd_2fa_on() {
+    local unlock_only=false
+    if [ "${1:-}" = "--unlock" ]; then
+        unlock_only=true
+        shift
+    fi
+
+    local totp_code="${1:-}"
+
+    local label="view"
+    [ "$unlock_only" = true ] && label="unlock"
+
+    if [ -z "$totp_code" ]; then
+        if command -v zenity &>/dev/null; then
+            totp_code=$(zenity --entry --title="LLM Secrets — Re-enable 2FA (${label})" \
+                --text="Enter your Google Authenticator code to re-enable 2FA for ${label}:" \
+                --width=300 2>/dev/null) || return 1
+        else
+            echo -n "Enter 2FA code to re-enable (${label}): "
+            read -r totp_code
+        fi
+    fi
+
+    local method="enable_tfa"
+    [ "$unlock_only" = true ] && method="enable_tfa_unlock"
+
+    local response
+    response=$(send_request "{\"method\":\"${method}\",\"params\":{\"totp_code\":\"$totp_code\"}}")
+    local success=$(echo "$response" | jq -r '.success // false')
+
+    if [ "$success" = "true" ]; then
+        echo -e "${GREEN}2FA re-enabled for ${label} operations.${NC}"
+    else
+        local error=$(echo "$response" | jq -r '.error // "Unknown error"')
+        echo -e "${RED}${error}${NC}" >&2
+        return 1
+    fi
+}
+
+cmd_add() {
+    if [ $# -eq 0 ]; then
+        # ── GUI mode: zenity notepad ──
+        if ! command -v zenity &>/dev/null; then
+            echo -e "${RED}Usage: scrt3 add KEY=value [KEY2=value2 ...]${NC}" >&2
+            echo -e "${YELLOW}Or install zenity for GUI mode: sudo apt install zenity${NC}" >&2
+            return 1
+        fi
+
+        # Write placeholder to temp file (avoids pipe which breaks clipboard)
+        local tmpfile
+        tmpfile=$(mktemp /tmp/scrt3-add-XXXXXX.txt)
+        cat > "$tmpfile" << 'PLACEHOLDER'
+# Paste your secrets below, one per line
+# Format: KEY=value
+# Lines starting with # are ignored
+# Example:
+# API_KEY=sk-abc123
+# DB_PASSWORD=mysecretpassword
+PLACEHOLDER
+
+        local input
+        input=$(zenity --text-info --editable \
+            --title="LLM Secrets — Add Secrets" \
+            --width=700 --height=500 \
+            --font="monospace" \
+            --filename="$tmpfile" 2>/dev/null)
+        local zenity_rc=$?
+        rm -f "$tmpfile"
+
+        # User clicked Cancel or closed
+        if [ $zenity_rc -ne 0 ] || [ -z "$input" ]; then
+            echo -e "${YELLOW}Cancelled.${NC}"
+            return 0
+        fi
+
+        # Parse lines with Python for robust KEY=value extraction and JSON building
+        local json_secrets
+        json_secrets=$(printf '%s' "$input" | python3 -c '
+import sys, json, re
+
+lines = sys.stdin.read().splitlines()
+secrets = {}
+skipped = []
+for line in lines:
+    stripped = line.strip()
+    # Skip empty lines and comments
+    if not stripped or stripped.startswith("#"):
+        continue
+    # Try KEY=value first
+    if "=" in stripped:
+        key, value = stripped.split("=", 1)
+        key = key.strip()
+        if key:
+            secrets[key] = value
+            continue
+    # Try KEY: value (colon separator)
+    if ":" in stripped:
+        key, value = stripped.split(":", 1)
+        key = key.strip()
+        value = value.strip()
+        if key and re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", key):
+            secrets[key] = value
+            continue
+    skipped.append(stripped)
+
+# Print skipped lines to stderr
+for s in skipped:
+    print(f"SKIPPED:{s}", file=sys.stderr)
+
+# Print count to stderr
+print(f"COUNT:{len(secrets)}", file=sys.stderr)
+
+# Print JSON to stdout
+print(json.dumps(secrets), end="")
+' 2>/tmp/scrt3-add-parse.log)
+
+        # Show skipped lines
+        while IFS= read -r logline; do
+            if [[ "$logline" == SKIPPED:* ]]; then
+                echo -e "${YELLOW}Skipping: ${logline#SKIPPED:}${NC}" >&2
+            fi
+        done < /tmp/scrt3-add-parse.log
+
+        # Get count
+        local count
+        count=$(grep '^COUNT:' /tmp/scrt3-add-parse.log | head -1 | cut -d: -f2)
+        rm -f /tmp/scrt3-add-parse.log
+
+        if [ "${count:-0}" -eq 0 ]; then
+            echo -e "${YELLOW}No valid KEY=value lines found.${NC}"
+            echo -e "${YELLOW}Expected format: KEY=value (one per line)${NC}"
+            return 0
+        fi
+
+        # Send to daemon
+        local response
+        response=$(send_request "{\"method\":\"add_secrets\",\"params\":{\"secrets\":$json_secrets}}")
+        local success=$(echo "$response" | jq -r '.success // false')
+        if [ "$success" = "true" ]; then
+            local added=$(echo "$response" | jq -r '.data.count // 0')
+            echo -e "${GREEN}Added ${added} secret(s).${NC}"
+        else
+            local error=$(echo "$response" | jq -r '.error // "Unknown error"')
+            echo -e "${RED}${error}${NC}" >&2
+            return 1
+        fi
+        return 0
+    fi
+
+    # ── CLI mode (existing, unchanged) ──
+    # Build secrets JSON
+    local json_secrets="{"
+    local first=true
+    for pair in "$@"; do
+        local key="${pair%%=*}"
+        local value="${pair#*=}"
+        if [ "$first" = true ]; then
+            first=false
+        else
+            json_secrets+=","
+        fi
+        # Escape value for JSON
+        value=$(printf '%s' "$value" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()),end="")')
+        json_secrets+="\"$key\":$value"
+    done
+    json_secrets+="}"
+
+    local response
+    response=$(send_request "{\"method\":\"add_secrets\",\"params\":{\"secrets\":$json_secrets}}")
+
+    local success=$(echo "$response" | jq -r '.success // false')
+    if [ "$success" = "true" ]; then
+        local count=$(echo "$response" | jq -r '.data.count // 0')
+        echo -e "${GREEN}Added ${count} secret(s).${NC}"
+    else
+        local error=$(echo "$response" | jq -r '.error // "Unknown error"')
+        echo -e "${RED}${error}${NC}" >&2
+        return 1
+    fi
+}
+
+cmd_migrate() {
+    local old_key="${1:-}"
+    if [ -z "$old_key" ]; then
+        echo -e "${RED}Usage: scrt3 migrate <old-master-key-base64>${NC}" >&2
+        return 1
+    fi
+
+    # Prompt for new passphrase to protect the migrated key
+    echo -e "${YELLOW}Choose a passphrase to protect the new master key.${NC}"
+    local migrate_pp migrate_pp2
+    read -rs -p "New vault passphrase (min 8 chars): " migrate_pp
+    echo
+    read -rs -p "Confirm passphrase: " migrate_pp2
+    echo
+    if [ "$migrate_pp" != "$migrate_pp2" ]; then
+        echo -e "${RED}Passphrases do not match.${NC}" >&2
+        return 1
+    fi
+    if [ ${#migrate_pp} -lt 8 ]; then
+        echo -e "${RED}Passphrase must be at least 8 characters.${NC}" >&2
+        return 1
+    fi
+    local escaped_mpp
+    escaped_mpp=$(printf '%s' "$migrate_pp" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read())[1:-1],end="")')
+
+    local response
+    response=$(send_request "{\"method\":\"migrate\",\"params\":{\"old_key\":\"$old_key\",\"passphrase\":\"$escaped_mpp\"}}")
+
+    local success=$(echo "$response" | jq -r '.success // false')
+    if [ "$success" = "true" ]; then
+        local count=$(echo "$response" | jq -r '.data.count // 0')
+        echo -e "${GREEN}Migrated ${count} secret(s) to new master key.${NC}"
+    else
+        local error=$(echo "$response" | jq -r '.error // "Unknown error"')
+        echo -e "${RED}Migration failed: ${error}${NC}" >&2
+        return 1
+    fi
+}
+
+cmd_backup_key() {
+    local save_dir=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --save)
+                # Handle --save with or without a directory argument
+                if [ -n "${2:-}" ] && [[ "${2:-}" != --* ]]; then
+                    save_dir="$2"
+                    shift 2
+                else
+                    save_dir="."
+                    shift 1
+                fi
+                ;;
+            *)
+                echo -e "${RED}Unknown option: $1${NC}" >&2
+                echo "Usage: scrt3 backup-key [--save [directory]]" >&2
+                return 1
+                ;;
+        esac
+    done
+
+    echo -e "${CYAN}Retrieving master key from daemon...${NC}"
+
+    local response
+    response=$(send_request '{"method":"backup_key"}')
+
+    local success=$(echo "$response" | jq -r '.success // false')
+    if [ "$success" != "true" ]; then
+        local error=$(echo "$response" | jq -r '.error // "Unknown error"')
+        echo -e "${RED}Failed to retrieve master key: ${error}${NC}" >&2
+        return 1
+    fi
+
+    local key=$(echo "$response" | jq -r '.data.key')
+
+    # No --save flag: just print the key
+    if [ -z "$save_dir" ]; then
+        echo -e "${GREEN}Master key retrieved (${#key} characters).${NC}"
+        echo ""
+        echo -e "${CYAN}Master Key (save this securely!):${NC}"
+        echo "$key"
+        echo ""
+        echo -e "${YELLOW}Store this key in a secure offline location.${NC}"
+        echo -e "${YELLOW}Never paste it into Claude Code or any AI agent.${NC}"
+        return 0
+    fi
+
+    # --save: create password-encrypted master key backup
+    local abs_save_dir
+    abs_save_dir=$(cd "$save_dir" 2>/dev/null && pwd) || true
+    if [ ! -d "$save_dir" ]; then
+        echo -e "${RED}Directory not found: ${save_dir}${NC}" >&2
+        return 1
+    fi
+    abs_save_dir=$(cd "$save_dir" && pwd)
+
+    echo -e "${GREEN}Master key retrieved (${#key} characters).${NC}"
+    echo ""
+    echo -e "${CYAN}Creating encrypted master key backup...${NC}"
+    echo -e "  Destination: ${abs_save_dir}/encrypted-master-key-instructions.json"
+    echo -e "  Encryption:  PBKDF2-SHA256 (100k iterations) + AES-256-CBC"
+    echo ""
+    echo -e "${YELLOW}Choose a recovery password to protect the backup.${NC}"
+    echo -e "${YELLOW}You will need this password to recover your master key later.${NC}"
+    echo ""
+    read -s -p "Recovery password (min 8 chars): " password
+    echo
+    read -s -p "Confirm password: " password2
+    echo
+
+    if [ "$password" != "$password2" ]; then
+        echo -e "${RED}Passwords do not match. No file was created.${NC}" >&2
+        return 1
+    fi
+
+    if [ ${#password} -lt 8 ]; then
+        echo -e "${RED}Password must be at least 8 characters. No file was created.${NC}" >&2
+        return 1
+    fi
+
+    echo ""
+    echo -e "${CYAN}Encrypting master key...${NC}"
+
+    local out_file="${abs_save_dir}/encrypted-master-key-instructions.json"
+    local encrypt_script=$(mktemp)
+    cat > "$encrypt_script" << 'PYEOF'
+import json, os, sys, hashlib, base64, subprocess, datetime
+
+lines = sys.stdin.read().split('\n', 1)
+master_key, password = lines[0], lines[1]
+out_file = sys.argv[1]
+
+salt = os.urandom(16)
+iv = os.urandom(16)
+derived_key = hashlib.pbkdf2_hmac('sha256', password.encode(), salt, 100000, dklen=32)
+
+proc = subprocess.run(
+    ['openssl', 'enc', '-aes-256-cbc',
+     '-K', derived_key.hex(), '-iv', iv.hex(), '-nosalt'],
+    input=master_key.encode(), capture_output=True)
+if proc.returncode != 0:
+    print('Encryption failed', file=sys.stderr)
+    sys.exit(1)
+
+backup = {
+    'Type': 'MasterKeyBackup',
+    'Version': '2.0',
+    'CreatedAt': datetime.datetime.now().astimezone().isoformat(),
+    'SecurityMode': 'totp',
+    'Salt': base64.b64encode(salt).decode(),
+    'IV': base64.b64encode(iv).decode(),
+    'EncryptedMasterKey': base64.b64encode(proc.stdout).decode(),
+    'DecryptionInstructions': {
+        'Algorithm': 'AES-256-CBC',
+        'KeyDerivation': 'PBKDF2-SHA256',
+        'Iterations': 100000,
+        'KeyLength': 32,
+        'HowToDecrypt': [
+            '1. Run: scrt3 recover encrypted-master-key-instructions.json',
+            '2. Enter your recovery password when prompted',
+            '3. Your 44-character master key will be displayed',
+            '4. Use the master key with: scrt3 migrate <master-key>'
+        ],
+        'InlineRecoveryScript': (
+            '#!/usr/bin/env python3\n'
+            '# Save as recover.py and run: python3 recover.py <backup-file>\n'
+            'import json, sys, hashlib, base64, subprocess, getpass\n'
+            'with open(sys.argv[1], encoding="utf-8-sig") as f: backup = json.load(f)\n'
+            'pw = getpass.getpass("Recovery password: ")\n'
+            'salt = base64.b64decode(backup["Salt"])\n'
+            'iv = base64.b64decode(backup["IV"])\n'
+            'enc = base64.b64decode(backup["EncryptedMasterKey"])\n'
+            'iters = backup.get("DecryptionInstructions", {}).get("Iterations", 100000)\n'
+            'dk = hashlib.pbkdf2_hmac("sha256", pw.encode(), salt, iters, dklen=32)\n'
+            'r = subprocess.run(["openssl", "enc", "-aes-256-cbc", "-d",\n'
+            '    "-K", dk.hex(), "-iv", iv.hex(), "-nosalt"],\n'
+            '    input=enc, capture_output=True)\n'
+            'if r.returncode != 0: print("Failed.", file=sys.stderr); sys.exit(1)\n'
+            'key = r.stdout.decode().rstrip(chr(0))\n'
+            'print(f"Master Key: {key} ({len(key)} chars)")\n'
+        )
+    }
+}
+
+with open(out_file, 'w') as f:
+    json.dump(backup, f, indent=2)
+print('OK')
+PYEOF
+
+    local result
+    result=$(printf '%s\n%s' "$key" "$password" | python3 "$encrypt_script" "$out_file")
+    local rc=$?
+    rm -f "$encrypt_script"
+
+    if [ $rc -ne 0 ] || [ "$result" != "OK" ]; then
+        echo -e "${RED}Failed to create encrypted backup.${NC}" >&2
+        return 1
+    fi
+
+    # Generate recovery instructions alongside the backup
+    local readme_file="${abs_save_dir}/RECOVERY-INSTRUCTIONS.txt"
+    cat > "$readme_file" << READMEEOF
+HOW TO RECOVER YOUR MASTER KEY
+==============================
+Created: $(date '+%Y-%m-%d %H:%M')
+
+You need TWO things:
+  1. The file:  encrypted-master-key-instructions.json  (saved next to this readme)
+  2. The password YOU chose when you created the backup
+
+
+STEP-BY-STEP: GUI (easiest)
+────────────────────────────
+  1. Run "scrt3" (no arguments) to open the menu
+  2. Select "recover"
+  3. Select "I set a recovery password and saved a backup file"
+  4. Select this file: encrypted-master-key-instructions.json
+  5. Type your recovery password
+  6. Your master key appears on screen
+  7. Select "Import this key into LLM Secrets now"
+  8. Done — your secrets are restored
+
+
+STEP-BY-STEP: Command Line
+───────────────────────────
+  1. Run:
+
+       scrt3 recover "${abs_save_dir}/encrypted-master-key-instructions.json"
+
+  2. Type your recovery password
+  3. Your 44-character master key is displayed
+  4. Import it:
+
+       scrt3 migrate "<paste-your-master-key-here>"
+
+  5. Verify:
+
+       scrt3 list
+
+
+STEP-BY-STEP: Claude Code
+──────────────────────────
+  Paste this into Claude Code:
+
+    "Recover my master key from
+     ${abs_save_dir}/encrypted-master-key-instructions.json"
+
+  Claude Code runs the command. You type your password when prompted.
+
+
+STEP-BY-STEP: Emergency (no LLM Secrets installed)
+───────────────────────────────────────────────────
+  You only need Python 3 + OpenSSL (any Linux or Mac has these).
+
+  1. Open encrypted-master-key-instructions.json in a text editor
+  2. Copy the "InlineRecoveryScript" field into a file called recover.py
+     (replace the \\n with actual line breaks)
+  3. Run:
+
+       python3 recover.py encrypted-master-key-instructions.json
+
+  4. Type your recovery password
+  5. Your master key is displayed
+
+
+REMEMBER
+────────
+  • Your recovery password CANNOT be reset. If you forget it,
+    this backup is useless.
+  • Store the backup file and password in SEPARATE places.
+  • The file alone is not enough — it's encrypted with your password.
+READMEEOF
+
+    echo ""
+    echo -e "${GREEN}Encrypted master key saved!${NC}"
+    echo ""
+    echo -e "  Backup:       ${out_file}"
+    echo -e "  Instructions: ${readme_file}"
+    echo -e "  Encrypted:    Yes (AES-256-CBC, password-protected)"
+    echo -e "  Raw key:      NOT stored in these files"
+    echo ""
+    echo -e "${CYAN}To recover later:${NC}"
+    echo -e "  scrt3 recover \"${out_file}\""
+    echo -e "  (or read RECOVERY-INSTRUCTIONS.txt for detailed steps)"
+    echo ""
+    echo -e "${YELLOW}Remember your recovery password — it cannot be reset!${NC}"
+    echo -e "${YELLOW}Store the files and password in separate secure locations.${NC}"
+}
+
+cmd_recover() {
+    local backup_file="${1:-}"
+
+    # No args: launch GUI wizard (or print usage if no zenity)
+    if [ -z "$backup_file" ]; then
+        if command -v zenity &>/dev/null; then
+            _recover_wizard
+            return $?
+        else
+            echo -e "${RED}Usage: scrt3 recover <encrypted-master-key-instructions.json>${NC}" >&2
+            return 1
+        fi
+    fi
+
+    # CLI path: direct file recovery
+    if [ ! -f "$backup_file" ]; then
+        echo -e "${RED}File not found: ${backup_file}${NC}" >&2
+        return 1
+    fi
+
+    echo -e "${CYAN}=== LLM Secrets — Master Key Recovery ===${NC}"
+    echo ""
+
+    local created=$(jq -r '.CreatedAt // "unknown"' "$backup_file")
+    local version=$(jq -r '.Version // "1.0"' "$backup_file")
+    echo -e "  Backup created: ${created}"
+    echo -e "  Format version: ${version}"
+    echo ""
+
+    read -s -p "Enter recovery password: " password
+    echo
+    echo ""
+    echo -e "${YELLOW}Decrypting...${NC}"
+
+    local master_key
+    master_key=$(_decrypt_backup_file "$backup_file" "$password")
+
+    if [ $? -ne 0 ] || [ -z "$master_key" ]; then
+        echo -e "${RED}Decryption failed. Check your recovery password.${NC}" >&2
+        return 1
+    fi
+
+    echo ""
+    echo -e "${GREEN}SUCCESS! Your master key:${NC}"
+    echo ""
+    echo "  $master_key"
+    echo ""
+    echo -e "  Key length: ${#master_key} characters"
+    echo ""
+    echo -e "${CYAN}Next steps:${NC}"
+    echo -e "  • Import into running scrt3:  scrt3 migrate \"${master_key}\""
+    echo -e "  • Decrypt vault manually:     see InlineRecoveryScript in backup file"
+}
+
+# ── Shared decryption helper ──────────────────────────────────────
+# Usage: _decrypt_backup_file <file> <password>
+# Prints the recovered master key to stdout. Returns non-zero on failure.
+_decrypt_backup_file() {
+    local file="$1" password="$2"
+    local script=$(mktemp)
+    cat > "$script" << 'PYEOF'
+import json, sys, hashlib, base64, subprocess
+password = sys.stdin.read()
+with open(sys.argv[1], encoding='utf-8-sig') as f:
+    backup = json.load(f)
+salt = base64.b64decode(backup['Salt'])
+iv = base64.b64decode(backup['IV'])
+encrypted = base64.b64decode(backup['EncryptedMasterKey'])
+iters = backup.get('DecryptionInstructions', {}).get('Iterations', 100000)
+derived_key = hashlib.pbkdf2_hmac('sha256', password.encode(), salt, iters, dklen=32)
+result = subprocess.run(['openssl', 'enc', '-aes-256-cbc', '-d',
+    '-K', derived_key.hex(), '-iv', iv.hex(), '-nosalt'],
+    input=encrypted, capture_output=True)
+if result.returncode != 0: sys.exit(1)
+print(result.stdout.decode().rstrip(chr(0)))
+PYEOF
+    local key
+    key=$(printf '%s' "$password" | python3 "$script" "$file" 2>/dev/null)
+    local rc=$?
+    rm -f "$script"
+    [ $rc -ne 0 ] && return 1
+    [ -z "$key" ] && return 1
+    echo "$key"
+}
+
+# ── Recovery Wizard (GUI) ─────────────────────────────────────────
+_recover_wizard() {
+    local scenario
+    scenario=$(zenity --list \
+        --title="LLM Secrets — Recovery" \
+        --text="<span font='18' weight='bold'>What do you have?</span>\n\n<span font='11' color='#64748b'>Pick the option that best describes your situation.</span>\n" \
+        --column="Scenario" --column="Description" \
+        --print-column=1 \
+        "have-key" "I have my master key (from a password manager, paper, etc.)" \
+        "have-backup" "I set a recovery password and saved a backup file" \
+        "have-vault-zip" "I have a vault backup (zip from Google Drive or local)" \
+        "not-sure" "I'm not sure — help me find my backups" \
+        "nothing" "I don't have anything" \
+        --ok-label="  Next →  " \
+        --cancel-label="  ✕  Close  " \
+        --width=580 --height=400 2>/dev/null) || return 0
+
+    [ -z "$scenario" ] && return 0
+
+    case "$scenario" in
+        "have-key")       _recover_gui_import_key ;;
+        "have-backup")    _recover_gui_decrypt_backup ;;
+        "have-vault-zip") _recover_gui_vault_restore ;;
+        "not-sure")       _recover_gui_help_find ;;
+        "nothing")
+            zenity --warning \
+                --title="LLM Secrets — Recovery" \
+                --text="<span font='14' weight='bold'>Recovery is not possible without a backup</span>\n\n<span font='11'>Without your master key or a backup file, your\nencrypted secrets cannot be recovered.\n\nYou will need to re-create your secrets from scratch.\n\n<b>To prevent this next time:</b>\n  1. From the menu, select <b>backup-key</b> and save the\n     master key in a password manager or on paper\n  2. Select <b>backup-key --save</b> to create a\n     password-protected backup file\n  3. Select <b>backup-vault</b> to upload your\n     encrypted vault to Google Drive</span>" \
+                --ok-label="  Close  " \
+                --width=480 2>/dev/null
+            ;;
+    esac
+}
+
+# ── Scenario: I have my master key ────────────────────────────────
+_recover_gui_import_key() {
+    local master_key
+    master_key=$(zenity --entry \
+        --title="LLM Secrets — Import Master Key" \
+        --text="<span font='14' weight='bold'>Paste your master key</span>\n\n<span font='11' color='#64748b'>This is the 44-character key you saved to a\npassword manager, printed on paper, or stored on a USB drive.\n\nIt looks something like: <span font_family='monospace'>aBcDeFg1234567890xYz+/abcDEFghijk12345678==</span></span>\n" \
+        --ok-label="  Import →  " \
+        --cancel-label="  ← Back  " \
+        --width=540 2>/dev/null) || return 0
+    [ -z "$master_key" ] && return 0
+
+    if [ ${#master_key} -ne 44 ]; then
+        zenity --error --title="LLM Secrets" \
+            --text="<span font='12' weight='bold'>That doesn't look right</span>\n\n<span font='11'>Master keys are exactly 44 characters.\nYou entered ${#master_key} characters.\n\nCheck that you copied the full key, including\nany <b>=</b> signs at the end.</span>" \
+            --width=380 2>/dev/null
+        _recover_gui_import_key
+        return $?
+    fi
+
+    _recover_gui_do_migrate "$master_key"
+}
+
+# ── Scenario: I have a password-protected backup file ─────────────
+_recover_gui_decrypt_backup() {
+    # Step 1: Pick file
+    local file
+    file=$(zenity --file-selection \
+        --title="Step 1 of 3 — Find your backup file" \
+        --file-filter="Backup files|*.json *.backup" 2>/dev/null) || return 0
+    [ -z "$file" ] && return 0
+
+    # Validate it looks like a backup file
+    if ! jq -e '.EncryptedMasterKey' "$file" &>/dev/null; then
+        zenity --error --title="LLM Secrets" \
+            --text="<span font='12' weight='bold'>This doesn't look like a backup file</span>\n\n<span font='11'>The file you selected doesn't contain an\nencrypted master key.\n\nLook for a file named:\n  • <b>encrypted-master-key-instructions.json</b>\n  • <b>master-key.backup</b></span>" \
+            --width=420 2>/dev/null
+        _recover_gui_decrypt_backup
+        return $?
+    fi
+
+    local created=$(jq -r '.CreatedAt // "unknown"' "$file" 2>/dev/null)
+    local version=$(jq -r '.Version // "1.0"' "$file" 2>/dev/null)
+
+    # Step 2: Enter password
+    local password
+    password=$(zenity --entry --hide-text \
+        --title="Step 2 of 3 — Enter your recovery password" \
+        --text="<span font='14' weight='bold'>Enter the password you chose when you created this backup</span>\n\n<span font='11' color='#64748b'>File: $(basename "$file")\nCreated: ${created}</span>\n" \
+        --ok-label="  Decrypt →  " \
+        --cancel-label="  ← Back  " \
+        --width=500 2>/dev/null) || return 0
+    [ -z "$password" ] && return 0
+
+    # Step 3: Decrypt
+    local master_key
+    master_key=$(_decrypt_backup_file "$file" "$password")
+
+    if [ $? -ne 0 ] || [ -z "$master_key" ]; then
+        zenity --error --title="LLM Secrets — Recovery" \
+            --text="<span font='12' weight='bold'>Wrong password</span>\n\n<span font='11'>The password you entered didn't work.\nThis is the password <b>you chose</b> when you\nran <b>backup-key --save</b>.\n\nPlease try again.</span>" \
+            --width=380 2>/dev/null
+        _recover_gui_decrypt_backup
+        return $?
+    fi
+
+    # Success — show key + next action
+    local action
+    action=$(zenity --list \
+        --title="Step 3 of 3 — Your Master Key" \
+        --text="<span font='14' weight='bold' color='#22c55e'>Success!</span>\n\n<span font='11'>Your master key (${#master_key} characters):</span>\n<span font='13' font_family='monospace' weight='bold'>${master_key}</span>\n\n<span font='11' color='#64748b'>What would you like to do?</span>\n" \
+        --column="Action" --column="" \
+        --hide-header \
+        --print-column=1 \
+        "import" "Import this key into LLM Secrets now" \
+        "done" "I'll save it myself (copy from above)" \
+        --ok-label="  Go  " \
+        --cancel-label="  ✕  Close  " \
+        --width=540 --height=340 2>/dev/null)
+
+    if [ "$action" = "import" ]; then
+        _recover_gui_do_migrate "$master_key"
+    fi
+}
+
+# ── Scenario: I have a vault backup zip ───────────────────────────
+_recover_gui_vault_restore() {
+    # Offer to back up current state first
+    zenity --question \
+        --title="LLM Secrets — Restore Vault (Step 1 of 3)" \
+        --text="<span font='14' weight='bold'>Save your current vault first?</span>\n\n<span font='11'>Before replacing anything, it's a good idea to save\nwhat you have now — just in case.</span>" \
+        --ok-label="  Yes, save it first  " \
+        --cancel-label="  Skip →  " \
+        --width=460 2>/dev/null
+    if [ $? -eq 0 ]; then
+        local backup_dest
+        backup_dest=$(zenity --file-selection \
+            --title="Choose where to save" \
+            --directory 2>/dev/null)
+        if [ -n "$backup_dest" ]; then
+            cmd_backup_vault --local "$backup_dest"
+        fi
+    fi
+
+    # Show extraction instructions
+    local vault_display="\$HOME/.scrt3/"
+    zenity --info \
+        --title="LLM Secrets — Restore Vault (Step 2 of 3)" \
+        --text="<span font='14' weight='bold'>Extract your vault backup</span>\n\n<span font='11'><b>1.</b> Find your backup zip file\n     It's named something like <b>scrt3-backup-2026-03-08.zip</b>\n     Check your Google Drive or local backup folder.\n\n<b>2.</b> Extract (unzip) it to:\n     <span font_family='monospace'>${vault_display}</span>\n\n<b>3.</b> Click <b>Next</b> when done.</span>" \
+        --ok-label="  Next →  " \
+        --width=520 2>/dev/null || return 0
+
+    # Ask how they want to provide the key
+    local method
+    method=$(zenity --list \
+        --title="LLM Secrets — Restore Vault (Step 3 of 3)" \
+        --text="<span font='14' weight='bold'>Now you need your master key</span>\n\n<span font='11' color='#64748b'>The vault files are encrypted. To use them,\nyou need to provide your master key.</span>\n" \
+        --column="Method" --column="" \
+        --hide-header \
+        --print-column=1 \
+        "have-key" "I have my master key (password manager, paper, etc.)" \
+        "have-backup" "I have a password-protected backup file" \
+        "restart" "I didn't change machines — just restart" \
+        --ok-label="  Next →  " \
+        --cancel-label="  ← Back  " \
+        --width=520 --height=300 2>/dev/null) || return 0
+
+    case "$method" in
+        "have-key")
+            _recover_gui_import_key
+            ;;
+        "have-backup")
+            _recover_gui_decrypt_backup
+            ;;
+        "restart")
+            echo -e "${CYAN}Restarting daemon...${NC}"
+            pkill -f scrt3-daemon 2>/dev/null
+            rm -f "$SOCKET" 2>/dev/null
+            nohup scrt3-daemon >/dev/null 2>&1 &
+            disown
+            sleep 1
+            zenity --info --title="LLM Secrets" \
+                --text="<span font='14' weight='bold' color='#22c55e'>Daemon restarted</span>\n\n<span font='11'>Run <b>scrt3 unlock</b> then <b>scrt3 list</b> to verify\nyour secrets are working.</span>" \
+                --ok-label="  Done  " \
+                --width=400 2>/dev/null
+            ;;
+    esac
+}
+
+# ── Scenario: I'm not sure — help me find my backups ──────────────
+_recover_gui_help_find() {
+    local help_file=$(mktemp --suffix=.txt)
+    cat > "$help_file" << 'HELPEOF'
+╔═══════════════════════════════════════════════════════════════╗
+║         HELP ME FIND MY BACKUPS                              ║
+╚═══════════════════════════════════════════════════════════════╝
+
+Here's what to look for and where to look.
+
+
+WHAT TO SEARCH FOR
+──────────────────
+
+  1. PASSWORD-PROTECTED BACKUP FILE
+     File names:
+       • encrypted-master-key-instructions.json
+       • master-key.backup
+     These are small .json files (1-2 KB).
+     You need the password you chose when you created it.
+
+  2. MASTER KEY (a text string, not a file)
+     It's exactly 44 characters, looks like:
+       aBcDeFg1234567890xYz+/abcDEFghijk12345678==
+     Check your:
+       • Password manager (1Password, Bitwarden, etc.)
+       • Printed papers in a safe or lockbox
+       • Notes app, if you saved it there
+
+  3. VAULT BACKUP (a zip file)
+     File names:
+       • scrt3-backup-2026-*.zip
+       • scrt-backup-*.zip
+     Check Google Drive or any local backup folders.
+
+
+ASK CLAUDE CODE TO SEARCH FOR YOU
+──────────────────────────────────
+
+  Copy and paste any of these into Claude Code:
+
+  "Search my computer for encrypted-master-key-instructions.json
+   or master-key.backup"
+
+  "Search my computer for scrt3-backup or scrt-backup zip files"
+
+  "Look in my Downloads, Desktop, and Documents folders for
+   any LLM Secrets backup files"
+
+
+COMMON LOCATIONS
+────────────────
+
+  Backup files are often saved to:
+    • Desktop
+    • Downloads
+    • Documents
+    • Google Drive (for vault backups)
+
+  Your vault is stored at:
+    ~/.scrt3/
+
+
+ONCE YOU FIND SOMETHING
+───────────────────────
+
+  Found a .json or .backup file?
+    → Go back and select "I set a recovery password and saved a backup file"
+
+  Found a 44-character key?
+    → Go back and select "I have my master key"
+
+  Found a .zip file?
+    → Go back and select "I have a vault backup"
+
+HELPEOF
+
+    zenity --text-info \
+        --title="LLM Secrets — Help Me Find My Backups" \
+        --filename="$help_file" \
+        --editable \
+        --ok-label="  ← Back to Recovery  " \
+        --cancel-label="  ✕  Close  " \
+        --width=640 --height=580 \
+        --font="monospace 10" 2>/dev/null
+
+    local rc=$?
+    rm -f "$help_file"
+
+    # If they clicked "Back to Recovery", relaunch wizard
+    if [ $rc -eq 0 ]; then
+        _recover_wizard
+    fi
+}
+
+# ── Shared: run migrate via daemon ────────────────────────────────
+_recover_gui_do_migrate() {
+    local master_key="$1"
+
+    # Prompt for passphrase via GUI
+    local gui_pp
+    gui_pp=$(zenity --password --title="LLM Secrets — New Vault Passphrase" \
+        2>/dev/null) || return 0
+    if [ -z "$gui_pp" ] || [ ${#gui_pp} -lt 8 ]; then
+        zenity --error --title="LLM Secrets" \
+            --text="Passphrase must be at least 8 characters." \
+            --width=350 2>/dev/null
+        return 1
+    fi
+    local gui_pp2
+    gui_pp2=$(zenity --password --title="LLM Secrets — Confirm Passphrase" \
+        2>/dev/null) || return 0
+    if [ "$gui_pp" != "$gui_pp2" ]; then
+        zenity --error --title="LLM Secrets" \
+            --text="Passphrases do not match." \
+            --width=350 2>/dev/null
+        return 1
+    fi
+    local escaped_gui_pp
+    escaped_gui_pp=$(printf '%s' "$gui_pp" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read())[1:-1],end="")')
+
+    echo -e "${CYAN}Importing master key...${NC}"
+    local response
+    response=$(send_request "{\"method\":\"migrate\",\"params\":{\"old_key\":\"${master_key}\",\"passphrase\":\"$escaped_gui_pp\"}}")
+    local success=$(echo "$response" | jq -r '.success // false')
+
+    if [ "$success" = "true" ]; then
+        local count=$(echo "$response" | jq -r '.data.count // 0')
+        zenity --info --title="LLM Secrets — Recovery" \
+            --text="<span font='14' weight='bold' color='#22c55e'>Import successful!</span>\n\n<span font='11'>Migrated <b>${count}</b> secret(s) to new master key.\n\nYour secrets are now accessible.\nRun <b>scrt3 unlock</b> then <b>scrt3 list</b> to verify.</span>" \
+            --ok-label="  Done  " \
+            --width=420 2>/dev/null
+    else
+        local error=$(echo "$response" | jq -r '.error // "Unknown error"')
+        zenity --error --title="LLM Secrets — Recovery" \
+            --text="<span font='12' weight='bold'>Import failed</span>\n\n<span font='11'>${error}</span>" \
+            --width=400 2>/dev/null
+    fi
+}
+
+cmd_backup_guide() {
+    local guide_file=$(mktemp --suffix=.txt)
+    cat > "$guide_file" << 'GUIDE'
+╔═══════════════════════════════════════════════════════════════════╗
+║              LLM SECRETS — BACKUP & RECOVERY GUIDE              ║
+╚═══════════════════════════════════════════════════════════════════╝
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  !! YOUR ONE MANUAL STEP (do this now, never via AI)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  From this menu select "backup-key", or run in your terminal:
+
+    scrt3 backup-key
+
+  Copy the 44-character key. Store it somewhere safe:
+    - Printed on paper in a safe / lockbox
+    - Password manager (1Password, Bitwarden, etc.)
+    - Encrypted USB drive
+
+  !! This key decrypts ALL your secrets. Never paste
+  !! it into Claude Code, ChatGPT, or any AI agent.
+  !! Everything else below can be automated.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  COMMAND QUICK REFERENCE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  BACKUP:
+    scrt3 backup-vault              Vault → Google Drive (no password)
+    scrt3 backup-vault --local <dir> Vault → local zip  (no password)
+    scrt3 backup-key                Show raw master key  (USER ONLY)
+    scrt3 backup-key --save <dir>   Encrypt key → file   (you type password)
+
+  RECOVERY:
+    scrt3 recover <file>            Decrypt key backup   (you type password)
+    scrt3 migrate <key>             Import a master key  (no password)
+
+  STATUS:
+    scrt3 status                    Check session / daemon
+    scrt3 list                      Verify secrets are accessible
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  WHEN IS A PASSWORD NEEDED?
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  There are TWO types of backup. They protect different things
+  and only ONE of them needs a password.
+
+  ┌──────────────────────────────────────────────────────────────┐
+  │  VAULT BACKUP — no password                                  │
+  │                                                              │
+  │  What it does: Zips your already-encrypted vault files       │
+  │                and uploads them to Google Drive.             │
+  │  Why no password: The files are already AES-256 encrypted.   │
+  │                   The zip is just a container.               │
+  │  Command:  scrt3 backup-vault                                 │
+  │  Automate: Yes — fully safe for Claude Code                  │
+  └──────────────────────────────────────────────────────────────┘
+
+  ┌──────────────────────────────────────────────────────────────┐
+  │  KEY BACKUP — you choose a password                          │
+  │                                                              │
+  │  What it does: Encrypts your master key with a password      │
+  │                YOU type, saves to a .json file.              │
+  │  Why password: The master key is the "key to everything."    │
+  │                Your password adds a second layer so the      │
+  │                file alone isn't enough to unlock anything.   │
+  │  Command:  scrt3 backup-key --save ~/Desktop                 │
+  │  Automate: Yes — Claude Code runs the command, but YOU       │
+  │            type the password in your terminal.               │
+  │                                                              │
+  │  To recover later:                                           │
+  │    scrt3 recover encrypted-master-key-instructions.json      │
+  │    (you type the same password again)                        │
+  └──────────────────────────────────────────────────────────────┘
+
+  Summary:
+    scrt3 backup-vault        no password    zips encrypted files
+    scrt3 backup-key --save   YOU type one   encrypts the master key
+    scrt3 recover             YOU type one   decrypts the master key
+    scrt3 backup-key          no password    shows raw key (MANUAL ONLY)
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  GOOGLE DRIVE AUTOMATION (copy-paste for Claude Code)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Tell Claude Code any of these:
+
+  ┌──────────────────────────────────────────────────────────────┐
+  │                                                              │
+  │  "Back up my scrt3 vault to Google Drive"                    │
+  │                                                              │
+  │  "Back up my scrt3 vault locally to ~/backups"               │
+  │                                                              │
+  │  "Create an encrypted master key backup on my Desktop"       │
+  │                                                              │
+  │  "Recover my master key from                                 │
+  │   encrypted-master-key-instructions.json"                    │
+  │                                                              │
+  └──────────────────────────────────────────────────────────────┘
+
+  What happens:
+    Vault backup  → Claude runs the command, uploads, gives link. Done.
+    Key backup    → Claude runs the command, you type password. Done.
+    Key recovery  → Claude runs the command, you type password. Done.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  RECOVERY SCENARIOS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+  SCENARIO 1: Lost System / Reinstalled
+  ──────────────────────────────────────
+  You have: vault backup zip + master key (or key backup file)
+
+    1. Install scrt3 on new system
+    2. Download scrt3-backup-*.zip from Google Drive
+    3. Extract vault files to ~/.scrt3/
+    4. scrt3 migrate "<your-44-char-master-key>"
+    5. scrt3 unlock && scrt3 list
+
+
+  SCENARIO 2: Forgot Master Key (have key backup + password)
+  ──────────────────────────────────────────────────────────
+  You have: encrypted-master-key-instructions.json + password
+
+    1. scrt3 recover encrypted-master-key-instructions.json
+    2. Type your recovery password
+    3. Save the displayed master key (see top of this guide)
+    4. scrt3 migrate "<recovered-key>"
+
+
+  SCENARIO 3: New Machine Setup
+  ─────────────────────────────
+  You have: Google Drive backup + master key
+
+    1. Install scrt3 on new machine
+    2. Download scrt3-backup-YYYY-MM-DD.zip from Google Drive
+    3. Extract to ~/.scrt3/
+    4. scrt3 migrate "<your-master-key>"
+    5. scrt3 setup-2fa
+
+
+  SCENARIO 4: Vault Corrupted
+  ───────────────────────────
+  You have: working scrt3 + Google Drive backup
+
+    1. scrt3 backup-vault --local /tmp/pre-restore  (save current state)
+    2. Download last good backup from Google Drive
+    3. Replace vault files in ~/.scrt3/
+    4. pkill -f scrt3-daemon && scrt3 daemon &
+    5. scrt3 unlock && scrt3 list
+
+
+  SCENARIO 5: No scrt3 Available (standalone)
+  ───────────────────────────────────────────
+  You have: key backup file + password + Python + OpenSSL
+
+  The .json backup file contains an InlineRecoveryScript.
+    1. Open the .json file in any text editor
+    2. Copy the InlineRecoveryScript value
+    3. Save it as recover.py
+    4. python3 recover.py encrypted-master-key-instructions.json
+    5. Type your recovery password
+
+  Or use the standalone bash scripts:
+    ./recover-master-key.sh encrypted-master-key-instructions.json
+    ./decrypt-env-file.sh -k "<master-key>" -f .env.encrypted.v5
+
+
+  SCENARIO 6: Everything Lost (no backup, no key, no password)
+  ────────────────────────────────────────────────────────────
+  Recovery is NOT POSSIBLE. Re-create all secrets from scratch.
+  This is why the one step at the top of this guide matters.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  WHAT'S INSIDE EACH BACKUP FILE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  scrt3-backup-YYYY-MM-DD.zip (vault backup, no password):
+  ├── vault/
+  │   └── secrets.enc            Encrypted secrets (AES-256)
+  └── master.key                 Passphrase-protected master key
+
+  encrypted-master-key-instructions.json (key backup, password):
+    Your master key encrypted with YOUR chosen password
+    - PBKDF2-SHA256 (100,000 iterations) + AES-256-CBC
+    - Contains inline recovery script (works without scrt3)
+    - Compatible with any platform with Python + OpenSSL
+
+
+GUIDE
+
+    if command -v zenity &>/dev/null; then
+        zenity --text-info \
+            --title="LLM Secrets — Backup & Recovery Guide" \
+            --filename="$guide_file" \
+            --editable \
+            --ok-label="  Done  " \
+            --cancel-label="  ✕  Close  " \
+            --width=720 --height=700 \
+            --font="monospace 10" 2>/dev/null
+    else
+        cat "$guide_file"
+    fi
+
+    rm -f "$guide_file"
+}
+
+cmd_backup_vault() {
+    local local_dest=""
+
+    # Parse --local flag
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --local)
+                local_dest="${2:-}"
+                if [ -z "$local_dest" ]; then
+                    echo -e "${RED}Usage: scrt3 backup-vault --local <path>${NC}" >&2
+                    return 1
+                fi
+                shift 2
+                ;;
+            *)
+                echo -e "${RED}Unknown option: $1${NC}" >&2
+                echo "Usage: scrt3 backup-vault [--local <path>]" >&2
+                return 1
+                ;;
+        esac
+    done
+
+    # Vault paths
+    local vault_dir="$HOME/.scrt3/vault"
+    local master_key_file="$HOME/.scrt3/master.key"
+
+    if [ ! -d "$vault_dir" ]; then
+        echo -e "${RED}Vault not found at: ${vault_dir}${NC}" >&2
+        return 1
+    fi
+
+    # Count vault files
+    local vault_file_count=0 master_key_found=false
+    for f in "$vault_dir"/*; do
+        [ -f "$f" ] && vault_file_count=$((vault_file_count + 1))
+    done
+    if [ -f "$master_key_file" ]; then
+        master_key_found=true
+    fi
+
+    if [ "$vault_file_count" -eq 0 ]; then
+        echo -e "${RED}No vault files found in: ${vault_dir}${NC}" >&2
+        return 1
+    fi
+
+    local timestamp=$(date +%Y-%m-%d)
+    local zip_name="scrt3-backup-${timestamp}.zip"
+    local tmp_dir=$(mktemp -d)
+    local staging="${tmp_dir}/${zip_name%.zip}"
+    local zip_path="${tmp_dir}/${zip_name}"
+
+    local key_msg=""
+    if [ "$master_key_found" = true ]; then
+        key_msg=" + master key"
+    fi
+    echo -e "${CYAN}Backing up vault (${vault_file_count} vault files${key_msg})...${NC}"
+
+    # Stage files
+    mkdir -p "${staging}/vault"
+    for f in "$vault_dir"/*; do
+        [ -f "$f" ] && cp "$f" "${staging}/vault/"
+    done
+
+    if [ "$master_key_found" = true ]; then
+        cp "$master_key_file" "${staging}/master.key"
+    fi
+
+    # Create zip
+    (cd "$tmp_dir" && zip -rq "$zip_path" "${zip_name%.zip}/")
+    local zip_size=$(stat -c%s "$zip_path" 2>/dev/null || stat -f%z "$zip_path" 2>/dev/null)
+    echo -e "${GREEN}Created ${zip_name} (${zip_size} bytes)${NC}"
+
+    # Local backup mode
+    if [ -n "$local_dest" ]; then
+        if [ ! -d "$local_dest" ]; then
+            echo -e "${RED}Directory not found: ${local_dest}${NC}" >&2
+            rm -rf "$tmp_dir"
+            return 1
+        fi
+        cp "$zip_path" "${local_dest}/${zip_name}"
+        echo -e "${GREEN}Saved to: ${local_dest}/${zip_name}${NC}"
+        rm -rf "$tmp_dir"
+        return 0
+    fi
+
+    # Google Drive upload via scrt run (stable) + Python
+    # Uses scrt stable because personal_google_workspace lives there
+    echo -e "${CYAN}Uploading to Google Drive...${NC}"
+
+    local upload_script="${tmp_dir}/upload.py"
+    cat > "$upload_script" << 'PYEOF'
+#!/usr/bin/env python3
+"""Upload a file to Google Drive. Reads credentials from stdin."""
+import sys, os, json, re, urllib.request, urllib.parse
+
+file_path = sys.argv[1]
+file_name = os.path.basename(file_path)
+
+creds_raw = sys.stdin.read().strip()
+
+client_id = re.search(r"client_id:([^,}]+)", creds_raw)
+client_secret = re.search(r"client_secret:([^,}]+)", creds_raw)
+refresh_token = re.search(r"refresh_token:([^,}]+)", creds_raw)
+token_uri = re.search(r"token_uri:([^,}]+)", creds_raw)
+
+if not all([client_id, client_secret, refresh_token, token_uri]):
+    print("ERROR: Could not parse credentials", file=sys.stderr)
+    sys.exit(1)
+
+client_id = client_id.group(1).strip()
+client_secret = client_secret.group(1).strip()
+refresh_token = refresh_token.group(1).strip()
+token_uri = token_uri.group(1).strip()
+
+data = urllib.parse.urlencode({
+    "client_id": client_id, "client_secret": client_secret,
+    "refresh_token": refresh_token, "grant_type": "refresh_token"
+}).encode()
+req = urllib.request.Request(token_uri, data=data, method="POST")
+resp = json.loads(urllib.request.urlopen(req).read())
+access_token = resp["access_token"]
+
+file_size = os.path.getsize(file_path)
+boundary = "----Scrt3BackupBoundary"
+metadata = json.dumps({"name": file_name}).encode()
+
+with open(file_path, "rb") as f:
+    file_data = f.read()
+
+body = (
+    f"--{boundary}\r\n"
+    f"Content-Type: application/json; charset=UTF-8\r\n\r\n"
+).encode() + metadata + (
+    f"\r\n--{boundary}\r\n"
+    f"Content-Type: application/zip\r\n\r\n"
+).encode() + file_data + f"\r\n--{boundary}--".encode()
+
+req = urllib.request.Request(
+    "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart",
+    data=body,
+    headers={
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": f"multipart/related; boundary={boundary}",
+    },
+    method="POST"
+)
+
+resp = json.loads(urllib.request.urlopen(req).read())
+print(json.dumps({"id": resp["id"], "name": resp["name"]}))
+PYEOF
+
+    local result
+    result=$(scrt run 'echo "$env[personal_google_workspace]" | python3 '"${upload_script} ${zip_path}")
+
+    if [ $? -ne 0 ] || [ -z "$result" ]; then
+        echo -e "${RED}Upload failed. Is personal_google_workspace secret available in scrt?${NC}" >&2
+        echo -e "${YELLOW}Backup zip preserved at: ${zip_path}${NC}"
+        return 1
+    fi
+
+    local file_id=$(echo "$result" | jq -r '.id')
+    local file_name_out=$(echo "$result" | jq -r '.name')
+
+    echo -e "${GREEN}Uploaded successfully!${NC}"
+    echo -e "  Name: ${file_name_out}"
+    echo -e "  Link: ${CYAN}https://drive.google.com/file/d/${file_id}/view${NC}"
+
+    # Cleanup
+    rm -rf "$tmp_dir"
+}
+
+cmd_menu() {
+    if ! command -v zenity &>/dev/null; then
+        echo -e "${YELLOW}zenity not installed. Falling back to text help.${NC}" >&2
+        cmd_help
+        return
+    fi
+
+  while true; do
+    # Get live status for the header
+    local status_line="Inactive"
+    local status_color="#f59e0b"
+    local response
+    response=$(send_request '{"method":"status"}' 2>/dev/null)
+    local active=$(echo "$response" | jq -r '.data.active // false' 2>/dev/null)
+    if [ "$active" = "true" ]; then
+        local remaining=$(echo "$response" | jq -r '.data.remaining // 0' 2>/dev/null)
+        local mins=$((remaining / 60))
+        status_line="Active  ·  ${mins}m remaining"
+        status_color="#22c55e"
+    fi
+
+    local secret_count="?"
+    local list_response
+    list_response=$(send_request '{"method":"list"}' 2>/dev/null)
+    local list_ok=$(echo "$list_response" | jq -r '.success // false' 2>/dev/null)
+    if [ "$list_ok" = "true" ]; then
+        secret_count=$(echo "$list_response" | jq -r '.data.names | length' 2>/dev/null)
+    fi
+
+    local choice
+    choice=$(zenity --list \
+        --title="LLM Secrets" \
+        --text="<span font='22' weight='bold'>LLM Secrets</span>   <span font='11' color='#94a3b8'>v${VERSION}</span>\n\n<span font='11' weight='bold' color='${status_color}'>●</span>  <span font='12' color='#64748b'>${status_line}</span>  <span font='12' color='#cbd5e1'>·</span>  <span font='12' color='#64748b'>${secret_count} secrets</span>\n<span font='10' color='#94a3b8'>Start typing to search</span>\n" \
+        --column="Command" --column="Description" \
+        --print-column=1 \
+        "unlock" "Authenticate session" \
+        "status" "Check session status" \
+        "list" "List secret names" \
+        "view" "View secret values (GUI)" \
+        "add" "Add secrets (GUI notepad)" \
+        "run ..." "Run command with secrets" \
+        "backup-vault" "Backup vault to Google Drive" \
+        "backup-vault --local" "Backup vault locally" \
+        "extend" "Reset session timer" \
+        "backup-key" "Show master key (disaster recovery)" \
+        "backup-key --save" "Save encrypted master key backup" \
+        "recover" "Recover master key from backup file" \
+        "backup-guide" "Backup & recovery guide (notepad)" \
+        "setup-2fa" "Configure 2FA authentication" \
+        "2fa-off" "Turn off 2FA for view" \
+        "2fa-on" "Turn on 2FA for view" \
+        "2fa-off --unlock" "Turn off 2FA for unlock" \
+        "2fa-on --unlock" "Turn on 2FA for unlock" \
+        "check-totp" "Check TOTP configuration" \
+        "logout" "Clear session" \
+        --ok-label="  Run  " \
+        --cancel-label="  ✕  Close  " \
+        --width=480 --height=520 2>/dev/null) || break
+
+    [ -z "$choice" ] && break
+
+    # Handle commands that need follow-up input
+    case "$choice" in
+        "run ...")
+            local cmd
+            cmd=$(zenity --entry \
+                --title="LLM Secrets — Run" \
+                --text="<span font='14' weight='bold'>Run command with secrets</span>\n\n<span font='11' color='#64748b'>Use \$env[NAME] for secret injection</span>\n" \
+                --entry-text='echo "$env[SECRET_NAME]"' \
+                --ok-label="  Execute  " \
+                --width=500 2>/dev/null) || continue
+            [ -z "$cmd" ] && continue
+            echo -e "${CYAN}Running: ${cmd}${NC}"
+            cmd_run "$cmd"
+            ;;
+        "backup-vault --local")
+            local dest
+            dest=$(zenity --file-selection \
+                --title="Choose backup destination" \
+                --directory 2>/dev/null) || continue
+            [ -z "$dest" ] && continue
+            cmd_backup_vault --local "$dest"
+            ;;
+        "backup-key --save")
+            # Pick directory
+            local save_dest
+            save_dest=$(zenity --file-selection \
+                --title="LLM Secrets — Choose Backup Destination" \
+                --directory 2>/dev/null) || continue
+            [ -z "$save_dest" ] && continue
+
+            # Retrieve master key from daemon first
+            echo -e "${CYAN}Retrieving master key from daemon...${NC}"
+            local bk_response
+            bk_response=$(send_request '{"method":"backup_key"}')
+            local bk_success=$(echo "$bk_response" | jq -r '.success // false')
+            if [ "$bk_success" != "true" ]; then
+                local bk_error=$(echo "$bk_response" | jq -r '.error // "Unknown error"')
+                zenity --error --title="LLM Secrets" \
+                    --text="Failed to retrieve master key:\n${bk_error}" \
+                    --width=400 2>/dev/null
+                continue
+            fi
+            local bk_key=$(echo "$bk_response" | jq -r '.data.key')
+
+            # Get password via GUI form
+            local pw_result
+            pw_result=$(zenity --forms \
+                --title="LLM Secrets — Encrypt Master Key" \
+                --text="<span font='14' weight='bold'>Choose a recovery password</span>\n\n<span font='11' color='#64748b'>You will need this password to recover your master key later.\nMinimum 8 characters. Store it separately from the backup file.</span>\n" \
+                --add-password="Recovery password" \
+                --add-password="Confirm password" \
+                --ok-label="  Encrypt & Save  " \
+                --cancel-label="  Cancel  " \
+                --width=460 2>/dev/null) || continue
+            [ -z "$pw_result" ] && continue
+
+            local pw1 pw2
+            pw1=$(echo "$pw_result" | cut -d'|' -f1)
+            pw2=$(echo "$pw_result" | cut -d'|' -f2)
+
+            if [ "$pw1" != "$pw2" ]; then
+                zenity --error --title="LLM Secrets" \
+                    --text="Passwords do not match. No file was created." \
+                    --width=350 2>/dev/null
+                continue
+            fi
+            if [ ${#pw1} -lt 8 ]; then
+                zenity --error --title="LLM Secrets" \
+                    --text="Password must be at least 8 characters. No file was created." \
+                    --width=350 2>/dev/null
+                continue
+            fi
+
+            # Encrypt and save
+            local bk_out_file="${save_dest}/encrypted-master-key-instructions.json"
+            local bk_encrypt_script=$(mktemp)
+            cat > "$bk_encrypt_script" << 'BKPYEOF'
+import json, os, sys, hashlib, base64, subprocess, datetime
+lines = sys.stdin.read().split('\n', 1)
+master_key, password = lines[0], lines[1]
+out_file = sys.argv[1]
+salt = os.urandom(16)
+iv = os.urandom(16)
+derived_key = hashlib.pbkdf2_hmac('sha256', password.encode(), salt, 100000, dklen=32)
+proc = subprocess.run(['openssl', 'enc', '-aes-256-cbc',
+    '-K', derived_key.hex(), '-iv', iv.hex(), '-nosalt'],
+    input=master_key.encode(), capture_output=True)
+if proc.returncode != 0:
+    print('Encryption failed', file=sys.stderr); sys.exit(1)
+backup = {
+    'Type': 'MasterKeyBackup', 'Version': '2.0',
+    'CreatedAt': datetime.datetime.now().astimezone().isoformat(),
+    'SecurityMode': 'totp',
+    'Salt': base64.b64encode(salt).decode(),
+    'IV': base64.b64encode(iv).decode(),
+    'EncryptedMasterKey': base64.b64encode(proc.stdout).decode(),
+    'DecryptionInstructions': {
+        'Algorithm': 'AES-256-CBC', 'KeyDerivation': 'PBKDF2-SHA256',
+        'Iterations': 100000, 'KeyLength': 32,
+        'HowToDecrypt': [
+            '1. Run: scrt3 recover encrypted-master-key-instructions.json',
+            '2. Enter your recovery password when prompted',
+            '3. Your 44-character master key will be displayed',
+            '4. Use the master key with: scrt3 migrate <master-key>'
+        ],
+        'InlineRecoveryScript': (
+            '#!/usr/bin/env python3\n'
+            'import json, sys, hashlib, base64, subprocess, getpass\n'
+            'with open(sys.argv[1], encoding="utf-8-sig") as f: backup = json.load(f)\n'
+            'pw = getpass.getpass("Recovery password: ")\n'
+            'salt = base64.b64decode(backup["Salt"])\n'
+            'iv = base64.b64decode(backup["IV"])\n'
+            'enc = base64.b64decode(backup["EncryptedMasterKey"])\n'
+            'iters = backup.get("DecryptionInstructions", {}).get("Iterations", 100000)\n'
+            'dk = hashlib.pbkdf2_hmac("sha256", pw.encode(), salt, iters, dklen=32)\n'
+            'r = subprocess.run(["openssl", "enc", "-aes-256-cbc", "-d",\n'
+            '    "-K", dk.hex(), "-iv", iv.hex(), "-nosalt"],\n'
+            '    input=enc, capture_output=True)\n'
+            'if r.returncode != 0: print("Failed.", file=sys.stderr); sys.exit(1)\n'
+            'key = r.stdout.decode().rstrip(chr(0))\n'
+            'print(f"Master Key: {key} ({len(key)} chars)")\n')
+    }
+}
+with open(out_file, 'w') as f:
+    json.dump(backup, f, indent=2)
+print('OK')
+BKPYEOF
+            local bk_result
+            bk_result=$(printf '%s\n%s' "$bk_key" "$pw1" | python3 "$bk_encrypt_script" "$bk_out_file")
+            local bk_rc=$?
+            rm -f "$bk_encrypt_script"
+
+            if [ $bk_rc -ne 0 ] || [ "$bk_result" != "OK" ]; then
+                zenity --error --title="LLM Secrets" \
+                    --text="Encryption failed." --width=300 2>/dev/null
+                continue
+            fi
+
+            # Generate recovery instructions readme
+            local bk_readme="${save_dest}/RECOVERY-INSTRUCTIONS.txt"
+            cat > "$bk_readme" << GUIREADMEEOF
+HOW TO RECOVER YOUR MASTER KEY
+==============================
+Created: $(date '+%Y-%m-%d %H:%M')
+
+You need TWO things:
+  1. The file:  encrypted-master-key-instructions.json  (saved next to this readme)
+  2. The password YOU chose when you created the backup
+
+
+STEP-BY-STEP: GUI (easiest)
+────────────────────────────
+  1. Run "scrt3" (no arguments) to open the menu
+  2. Select "recover"
+  3. Select "I set a recovery password and saved a backup file"
+  4. Select this file: encrypted-master-key-instructions.json
+  5. Type your recovery password
+  6. Your master key appears on screen
+  7. Select "Import this key into LLM Secrets now"
+  8. Done — your secrets are restored
+
+
+STEP-BY-STEP: Command Line
+───────────────────────────
+  1. Run:
+
+       scrt3 recover "${save_dest}/encrypted-master-key-instructions.json"
+
+  2. Type your recovery password
+  3. Your 44-character master key is displayed
+  4. Import it:
+
+       scrt3 migrate "<paste-your-master-key-here>"
+
+  5. Verify:
+
+       scrt3 list
+
+
+STEP-BY-STEP: Claude Code
+──────────────────────────
+  Paste this into Claude Code:
+
+    "Recover my master key from
+     ${save_dest}/encrypted-master-key-instructions.json"
+
+  Claude Code runs the command. You type your password when prompted.
+
+
+STEP-BY-STEP: Emergency (no LLM Secrets installed)
+───────────────────────────────────────────────────
+  You only need Python 3 + OpenSSL (any Linux or Mac has these).
+
+  1. Open encrypted-master-key-instructions.json in a text editor
+  2. Copy the "InlineRecoveryScript" field into a file called recover.py
+     (replace the \\n with actual line breaks)
+  3. Run:
+
+       python3 recover.py encrypted-master-key-instructions.json
+
+  4. Type your recovery password
+  5. Your master key is displayed
+
+
+REMEMBER
+────────
+  • Your recovery password CANNOT be reset. If you forget it,
+    this backup is useless.
+  • Store the backup file and password in SEPARATE places.
+  • The file alone is not enough — it's encrypted with your password.
+GUIREADMEEOF
+
+            zenity --info --title="LLM Secrets" \
+                --text="<span font='14' weight='bold'>Encrypted master key saved!</span>\n\n<span font='11'><b>Backup:</b>  ${bk_out_file}\n<b>Instructions:</b>  ${bk_readme}\n<b>Encrypted:</b>  Yes (AES-256-CBC, password-protected)\n<b>Raw key:</b>  NOT stored in these files</span>\n\n<span font='11' color='#64748b'>Read RECOVERY-INSTRUCTIONS.txt for detailed\nstep-by-step recovery methods.</span>\n\n<span font='11' color='#f59e0b'>Remember your recovery password — it cannot be reset!</span>" \
+                --ok-label="  Done  " \
+                --width=520 2>/dev/null
+            ;;
+        "recover")
+            _recover_wizard
+            ;;
+        *)
+            # Execute the selected command
+            echo -e "${CYAN}scrt3 ${choice}${NC}"
+            case "$choice" in
+                unlock)     cmd_unlock ;;
+                status)
+                    local status_out
+                    status_out=$(cmd_status 2>&1)
+                    zenity --info --title="LLM Secrets — Status" \
+                        --text="$status_out" --width=400 2>/dev/null || true
+                    ;;
+                list)
+                    local list_out
+                    list_out=$(cmd_list 2>&1)
+                    if [ -z "$list_out" ]; then
+                        zenity --info --title="LLM Secrets — Secret Names" \
+                            --text="No secrets stored.\n\nAdd with: scrt3 add KEY=value" \
+                            --width=350 2>/dev/null
+                    else
+                        zenity --text-info --title="LLM Secrets — Secret Names" \
+                            --width=500 --height=400 --font="monospace" \
+                            <<< "$list_out" 2>/dev/null || true
+                    fi
+                    ;;
+                view)       cmd_view ;;
+                add)        cmd_add ;;
+                backup-vault) cmd_backup_vault ;;
+                extend)     cmd_extend ;;
+                backup-key) cmd_backup_key ;;
+                backup-guide) cmd_backup_guide ;;
+                setup-2fa)  cmd_setup_2fa ;;
+                2fa-off)  cmd_2fa_off ;;
+                2fa-on) cmd_2fa_on ;;
+                "2fa-off --unlock") cmd_2fa_off --unlock ;;
+                "2fa-on --unlock") cmd_2fa_on --unlock ;;
+                check-totp) cmd_check_totp ;;
+                logout)     cmd_logout ;;
+            esac
+            ;;
+    esac
+  done
+}
+
+cmd_help() {
+    echo "scrt3 v${VERSION} - WSL2 secure secret injector (TOTP edition)"
+    echo ""
+    echo "USAGE:"
+    echo "  scrt3 <command> [options]"
+    echo ""
+    echo "COMMANDS:"
+    echo "  daemon            Start the scrt3 daemon (foreground)"
+    echo "  setup-2fa         Configure 2FA (defaults to agent mode)"
+    echo "  setup-2fa agent   Non-interactive setup with QR in terminal (default)"
+    echo "  setup-2fa qr      Setup with QR in GUI (zenity)"
+    echo "  setup-2fa manual  Setup via hidden CLI input (no GUI)"
+    echo "  unlock [ttl] [code] Authenticate with TOTP (default: 72000s / 20h)"
+    echo "  status            Check session status"
+    echo "  list              List secret names"
+    echo "  run <command>     Run command with \$env[NAME] substitution"
+    echo "  add [KEY=val ...]  Add secrets (GUI notepad if no args, or KEY=value on command line)"
+    echo "  view [code]       View secrets (2FA prompt or pass code; GUI challenge if 2FA disabled)"
+    echo "  2fa-off [--unlock] [code] Turn off 2FA for view (or unlock with --unlock)"
+    echo "  2fa-on [--unlock] [code]  Turn on 2FA for view (or unlock with --unlock)"
+    echo "  extend [ttl]      Reset session timer"
+    echo "  logout            Clear session (aliases: lock, clear)"
+    echo "  check-totp        Check TOTP configuration status"
+    echo "  migrate <key>     Migrate secrets from old master key"
+    echo "  backup-vault [--local]  Backup encrypted vault to Google Drive (or local)"
+    echo "  backup-key [--save <dir>]  Show or save master key (encrypted backup)"
+    echo "  recover <file>    Recover master key from encrypted backup file"
+    echo "  backup-guide      Open backup & recovery guide (GUI notepad)"
+    echo "  help              Show this help"
+    echo ""
+    echo "GETTING STARTED:"
+    echo "  scrt3 daemon &                  # Start daemon in background"
+    echo "  scrt3 setup-2fa                 # Set up 2FA (agent mode, QR in terminal)"
+    echo "  scrt3 setup-2fa qr              # Set up 2FA with QR in GUI (zenity)"
+    echo "  scrt3 setup-2fa manual          # Set up 2FA via hidden CLI input"
+    echo "  scrt3 unlock                    # Authenticate (2 hour session)"
+    echo ""
+    echo "EXAMPLES:"
+    echo "  scrt3 unlock 28800              # 8 hour session"
+    echo "  scrt3 list                      # List secret names"
+    echo "  scrt3 run 'curl -H \"Auth: Bearer \$env[API_KEY]\" https://api.example.com'"
+    echo "  scrt3 add API_KEY=sk-123        # Add a secret"
+    echo "  scrt3 view                      # View secrets in GUI"
+    echo "  scrt3 backup-vault              # Backup vault to Google Drive"
+    echo "  scrt3 backup-vault --local ~/  # Backup vault locally"
+    echo "  scrt3 backup-key --save .       # Save encrypted master key backup"
+    echo "  scrt3 recover file.json         # Recover master key from backup"
+    echo ""
+    echo "DISASTER RECOVERY:"
+    echo "  1. Create backup:  scrt3 backup-key --save <directory>"
+    echo "     Encrypts your master key with a recovery password you choose."
+    echo "     Saves as 'encrypted-master-key-instructions.json'."
+    echo "  2. Recover key:    scrt3 recover encrypted-master-key-instructions.json"
+    echo "     Decrypts the backup file with your recovery password."
+    echo "  3. Import key:     scrt3 migrate <recovered-master-key>"
+    echo "  Also compatible with v1.0 backup files from earlier versions."
+    echo "  Store the backup file + password in separate secure locations."
+}
+
+# Commands that don't need the daemon
+case "${1:-}" in
+    daemon)       exec scrt3-daemon ;;
+    help|--help|-h) cmd_help; exit 0 ;;
+    -v|--version) echo "scrt3 v${VERSION}"; exit 0 ;;
+esac
+
+# All other commands require the daemon to be running
+if [ ! -S "$SOCKET" ]; then
+    echo -e "${RED}Daemon not running. Start with: scrt3 daemon${NC}" >&2
+    exit 1
+fi
+
+# No args → GUI menu
+if [ $# -eq 0 ]; then
+    cmd_menu
+    exit 0
+fi
+
+# Route command
+case "$1" in
+    unlock)       shift; cmd_unlock "$@" ;;
+    status)       cmd_status ;;
+    list)         cmd_list ;;
+    run)          shift; cmd_run "$@" ;;
+    logout|lock|clear) cmd_logout ;;
+    check-totp|check) cmd_check_totp ;;
+    setup-2fa)    shift; cmd_setup_2fa "$@" ;;
+    extend)       shift; cmd_extend "$@" ;;
+    view)         shift; cmd_view "$@" ;;
+    2fa-off)  shift; cmd_2fa_off "$@" ;;
+    2fa-on) shift; cmd_2fa_on "$@" ;;
+    add)          shift; cmd_add "$@" ;;
+    migrate)      shift; cmd_migrate "$@" ;;
+    backup-vault) shift; cmd_backup_vault "$@" ;;
+    backup-key)   shift; cmd_backup_key "$@" ;;
+    recover)      shift; cmd_recover "$@" ;;
+    backup-guide) cmd_backup_guide ;;
+    help|--help|-h) cmd_help ;;
+    -v|--version) echo "scrt3 v${VERSION}" ;;
+    *)
+        echo -e "${RED}Unknown command: $1${NC}" >&2
+        cmd_help
+        exit 1
+        ;;
+esac

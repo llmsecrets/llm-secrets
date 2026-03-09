@@ -1,7 +1,7 @@
 //! TOTP (Time-based One-Time Password) authentication module
 //!
-//! Replaces Windows Hello with Google Authenticator-compatible TOTP.
-//! The TOTP secret is stored at ~/.scrt/totp.secret with 0600 permissions.
+//! Google Authenticator-compatible TOTP for scrt3.
+//! The TOTP secret is stored at ~/.scrt3/totp.secret with 0600 permissions.
 
 use std::path::PathBuf;
 use totp_rs::{Algorithm, TOTP, Secret};
@@ -15,7 +15,7 @@ const TOTP_ACCOUNT: &str = "wsl-daemon";
 /// Get the path to the TOTP secret file
 pub fn get_totp_secret_path() -> PathBuf {
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/tmp"));
-    home.join(".scrt2").join("totp.secret")
+    home.join(".scrt3").join("totp.secret")
 }
 
 /// Check if TOTP has been configured (secret file exists)
@@ -69,7 +69,7 @@ pub fn save_totp_secret(secret_b32: &str) -> Result<(), String> {
     // Create parent directory
     if let Some(parent) = secret_path.parent() {
         std::fs::create_dir_all(parent)
-            .map_err(|e| format!("Failed to create ~/.scrt directory: {}", e))?;
+            .map_err(|e| format!("Failed to create ~/.scrt3 directory: {}", e))?;
     }
 
     // Write secret
@@ -90,7 +90,7 @@ pub fn save_totp_secret(secret_b32: &str) -> Result<(), String> {
 /// Get the path to the 2FA state file
 pub fn get_tfa_state_path() -> PathBuf {
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/tmp"));
-    home.join(".scrt2").join("2fa.state")
+    home.join(".scrt3").join("2fa.state")
 }
 
 /// Check if 2FA is enabled for reveal operations.
@@ -108,14 +108,14 @@ pub fn is_tfa_enabled() -> bool {
 }
 
 /// Set the 2FA state (enabled or disabled).
-/// Writes to ~/.scrt2/2fa.state with 0600 permissions.
+/// Writes to ~/.scrt3/2fa.state with 0600 permissions.
 pub fn set_tfa_state(enabled: bool) -> Result<(), String> {
     let state_path = get_tfa_state_path();
 
     // Create parent directory
     if let Some(parent) = state_path.parent() {
         std::fs::create_dir_all(parent)
-            .map_err(|e| format!("Failed to create ~/.scrt2 directory: {}", e))?;
+            .map_err(|e| format!("Failed to create ~/.scrt3 directory: {}", e))?;
     }
 
     let content = if enabled { "enabled" } else { "disabled" };
@@ -135,7 +135,7 @@ pub fn set_tfa_state(enabled: bool) -> Result<(), String> {
 /// Get the path to the 2FA unlock state file
 pub fn get_tfa_unlock_state_path() -> PathBuf {
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/tmp"));
-    home.join(".scrt2").join("2fa-unlock.state")
+    home.join(".scrt3").join("2fa-unlock.state")
 }
 
 /// Check if 2FA is enabled for unlock operations.
@@ -153,14 +153,14 @@ pub fn is_tfa_unlock_enabled() -> bool {
 }
 
 /// Set the 2FA unlock state (enabled or disabled).
-/// Writes to ~/.scrt2/2fa-unlock.state with 0600 permissions.
+/// Writes to ~/.scrt3/2fa-unlock.state with 0600 permissions.
 pub fn set_tfa_unlock_state(enabled: bool) -> Result<(), String> {
     let state_path = get_tfa_unlock_state_path();
 
     // Create parent directory
     if let Some(parent) = state_path.parent() {
         std::fs::create_dir_all(parent)
-            .map_err(|e| format!("Failed to create ~/.scrt2 directory: {}", e))?;
+            .map_err(|e| format!("Failed to create ~/.scrt3 directory: {}", e))?;
     }
 
     let content = if enabled { "enabled" } else { "disabled" };
@@ -186,7 +186,7 @@ mod tests {
         let (secret_b32, uri) = generate_totp_secret().unwrap();
         assert!(!secret_b32.is_empty());
         assert!(uri.starts_with("otpauth://totp/"));
-        assert!(uri.contains("Scrt"));
+        assert!(uri.contains("LLM"));
 
         // Generate a current code and verify it
         let totp = build_totp(&secret_b32).unwrap();

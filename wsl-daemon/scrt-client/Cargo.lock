@@ -39,7 +39,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "scrt2-client"
+name = "scrt3-client"
 version = "0.1.0"
 dependencies = [
  "libc",

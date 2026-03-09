@@ -1,4 +1,4 @@
-// wsl2-helper/src/main.rs
+// scrt3/src/main.rs
 use std::path::PathBuf;
 use tokio::net::UnixListener;
 
@@ -7,7 +7,7 @@ mod session;
 mod handlers;
 mod sanitize;
 mod subprocess;
-mod dpapi;
+mod keystore;
 mod totp;
 mod audit;
 mod remote;
@@ -86,10 +86,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 fn get_socket_path() -> PathBuf {
     if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
-        PathBuf::from(runtime_dir).join("scrt2.sock")
+        PathBuf::from(runtime_dir).join("scrt3.sock")
     } else {
         // Fallback for systems without XDG_RUNTIME_DIR
         let uid = unsafe { libc::getuid() };
-        PathBuf::from(format!("/tmp/scrt2-{}.sock", uid))
+        PathBuf::from(format!("/tmp/scrt3-{}.sock", uid))
     }
 }

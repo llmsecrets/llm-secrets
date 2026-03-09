@@ -1,5 +1,5 @@
-// wsl2-daemon/src/remote.rs
-//! Remote session support for the WSL2 daemon
+// scrt3/src/remote.rs
+//! Remote session support for the scrt3 daemon
 //!
 //! Enables the daemon to accept connections from remote Claude Code sessions
 //! with token-based authentication. This is useful for:
@@ -350,7 +350,7 @@ pub fn save_config(config: &RemoteConfig) -> Result<(), std::io::Error> {
 fn get_config_path() -> std::path::PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
     std::path::PathBuf::from(home)
-        .join(".scrt2")
+        .join(".scrt3")
         .join("remote-config.json")
 }
 

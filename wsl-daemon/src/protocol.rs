@@ -1,4 +1,4 @@
-// wsl2-helper/src/protocol.rs
+// scrt3/src/protocol.rs
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -6,7 +6,7 @@ use std::collections::HashMap;
 #[derive(Debug, Deserialize)]
 #[serde(tag = "method", content = "params")]
 pub enum Request {
-    /// Store session with secrets (GUI sends this after DPAPI decrypt)
+    /// Store session with secrets
     #[serde(rename = "store")]
     Store {
         token: String,  // Base64-encoded random token
@@ -66,12 +66,13 @@ pub enum Request {
         secrets: HashMap<String, String>,
     },
 
-    /// Unlock secrets via TOTP authentication
-    /// This verifies the TOTP code, decrypts secrets, and loads them into memory
+    /// Unlock secrets via passphrase (+ optional TOTP)
+    /// Decrypts master key with passphrase, then decrypts secrets
     #[serde(rename = "unlock")]
     Unlock {
-        ttl: Option<u64>,      // Session TTL in seconds, default 7200 (2 hours)
-        totp_code: String,     // 6-digit TOTP code
+        ttl: Option<u64>,           // Session TTL in seconds, default 7200 (2 hours)
+        totp_code: Option<String>,  // 6-digit TOTP code (required when 2FA enabled)
+        passphrase: String,         // Vault passphrase (always required)
     },
 
     /// Check if TOTP is configured
@@ -94,28 +95,23 @@ pub enum Request {
         ttl: Option<u64>,  // New TTL in seconds; if None, keep current TTL
     },
 
-    /// Backup the current master key (requires Windows Hello + GUI challenge)
+    /// Backup the current master key (requires active session)
     #[serde(rename = "backup_key")]
     BackupKey,
 
-    /// Migrate secrets from an old master key to the current one
+    /// Migrate secrets from an old master key to a new passphrase-protected key
     #[serde(rename = "migrate")]
     Migrate {
-        old_key: String,  // Base64-encoded old master key (44 chars)
+        old_key: String,     // Base64-encoded old master key (44 chars)
+        passphrase: String,  // New passphrase to protect the new master key
     },
 
     /// Generate fresh encryption keys and reset the secret store
     /// Called during setup-2fa to bind new auth to new encryption
     #[serde(rename = "initialize_keys")]
-    InitializeKeys,
-
-    /// Reveal all secrets using TOTP authentication (bypasses GUI challenge)
-    #[serde(rename = "reveal_all_totp")]
-    RevealAllTotp { totp_code: String },
-
-    /// Reveal single secret using TOTP authentication (bypasses GUI challenge)
-    #[serde(rename = "reveal_totp")]
-    RevealTotp { name: String, totp_code: String },
+    InitializeKeys {
+        passphrase: String,  // Passphrase to protect the new master key
+    },
 
     /// Check 2FA state (configured + enabled/disabled)
     #[serde(rename = "check_tfa_state")]

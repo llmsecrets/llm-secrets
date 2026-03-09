@@ -1,10 +1,10 @@
-// wsl2-helper/src/handlers.rs
+// scrt3/src/handlers.rs
 use base64::Engine;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 
 use crate::audit::{self, AuditEvent, EventType, EventResult};
-use crate::dpapi;
+use crate::keystore;
 use crate::totp;
 use crate::protocol::{Request, Response, ResponseData};
 use crate::session::SharedSession;
@@ -82,16 +82,14 @@ async fn handle_request(line: &str) -> Response {
         Request::RevealAll => handle_reveal_all().await,
         Request::RevealAllConfirm { challenge, code } => handle_reveal_all_confirm(challenge, code).await,
         Request::AddSecrets { secrets } => handle_add_secrets(secrets).await,
-        Request::Unlock { ttl, totp_code } => handle_unlock(ttl, totp_code).await,
+        Request::Unlock { ttl, totp_code, passphrase } => handle_unlock(ttl, totp_code, passphrase).await,
         Request::CheckTotp => handle_check_totp().await,
         Request::SetupTotp => handle_setup_totp().await,
         Request::VerifyTotpSetup { code } => handle_verify_totp_setup(code).await,
         Request::Extend { ttl } => handle_extend(ttl).await,
         Request::BackupKey => handle_backup_key().await,
-        Request::Migrate { old_key } => handle_migrate(old_key).await,
-        Request::InitializeKeys => handle_initialize_keys().await,
-        Request::RevealAllTotp { totp_code } => handle_reveal_all_totp(totp_code).await,
-        Request::RevealTotp { name, totp_code } => handle_reveal_totp(name, totp_code).await,
+        Request::Migrate { old_key, passphrase } => handle_migrate(old_key, passphrase).await,
+        Request::InitializeKeys { passphrase } => handle_initialize_keys(passphrase).await,
         Request::CheckTfaState => handle_check_tfa_state().await,
         Request::DisableTfa { totp_code } => handle_disable_tfa(totp_code).await,
         Request::EnableTfa { totp_code } => handle_enable_tfa(totp_code).await,
@@ -125,7 +123,7 @@ async fn handle_store(
 
             // Persist updated secrets to encrypted env file on disk
             if let (Some(all_secrets), Some(master_key)) = (session.secrets(), session.master_key()) {
-                if let Err(e) = dpapi::save_encrypted_env(all_secrets, master_key) {
+                if let Err(e) = keystore::save_encrypted_env(all_secrets, master_key) {
                     tracing::error!("Failed to persist secrets to disk: {}", e);
                 }
             }
@@ -145,7 +143,7 @@ async fn handle_add_secrets(
         Ok(added) => {
             // Persist updated secrets to encrypted env file on disk
             if let (Some(all_secrets), Some(master_key)) = (session.secrets(), session.master_key()) {
-                if let Err(e) = dpapi::save_encrypted_env(all_secrets, master_key) {
+                if let Err(e) = keystore::save_encrypted_env(all_secrets, master_key) {
                     tracing::error!("Failed to persist secrets to disk: {}", e);
                     // Don't fail the request — in-memory update succeeded
                 }
@@ -356,20 +354,21 @@ async fn handle_reveal_all_confirm(challenge: String, code: String) -> Response 
     }
 }
 
-/// Unlock secrets — uses TOTP + DPAPI when 2FA enabled, DPAPI-only when 2FA disabled
-async fn handle_unlock(ttl: Option<u64>, totp_code: String) -> Response {
+/// Unlock secrets — uses TOTP + passphrase when 2FA enabled, passphrase-only when 2FA disabled
+async fn handle_unlock(ttl: Option<u64>, totp_code: Option<String>, passphrase: String) -> Response {
     let ttl = ttl.unwrap_or(7200);  // Default 2 hours
     let tfa_enabled = totp::is_tfa_unlock_enabled();
 
     audit::log_simple(EventType::AuthAttempt, EventResult::Pending);
 
-    // TOTP when 2FA enabled, DPAPI-only when 2FA disabled
+    // TOTP + passphrase when 2FA enabled, passphrase-only when 2FA disabled
     let (secrets, master_key) = match if tfa_enabled {
-        tracing::info!("Unlock via TOTP + DPAPI");
-        dpapi::unlock_secrets(&totp_code).await
+        tracing::info!("Unlock via TOTP + passphrase");
+        let code = totp_code.unwrap_or_default();
+        keystore::unlock_secrets(&code, &passphrase).await
     } else {
-        tracing::info!("Unlock via DPAPI only (2FA disabled)");
-        dpapi::unlock_secrets_dpapi_only().await
+        tracing::info!("Unlock via passphrase only (2FA disabled)");
+        keystore::unlock_secrets_passphrase_only(&passphrase).await
     } {
         Ok(s) => s,
         Err(e) => {
@@ -443,7 +442,7 @@ async fn handle_check_totp() -> Response {
 
 /// Generate a new TOTP secret for initial setup
 /// Secret is saved to disk only — not returned in the response to avoid leaking
-/// through socket/logs. The CLI reads it directly from ~/.scrt2/totp.secret.
+/// through socket/logs. The CLI reads it directly from ~/.scrt3/totp.secret.
 async fn handle_setup_totp() -> Response {
     match totp::generate_totp_secret() {
         Ok((secret, _otpauth_uri)) => {
@@ -492,14 +491,13 @@ async fn handle_backup_key() -> Response {
                 AuditEvent::new(EventType::BackupKeyRequested, EventResult::Failure)
                     .with_error("No active session or master key not available")
             );
-            Response::error("No active session. Run 'scrt unlock' first to access the master key.")
+            Response::error("No active session. Run 'scrt3 unlock' first to access the master key.")
         }
     }
 }
 
-/// Migrate secrets from an old master key to the current one
-/// This re-encrypts all secrets with the new DPAPI-protected key
-async fn handle_migrate(old_key: String) -> Response {
+/// Migrate secrets from an old master key to a new passphrase-protected key
+async fn handle_migrate(old_key: String, passphrase: String) -> Response {
     audit::log_event(
         AuditEvent::new(EventType::KeyMigration, EventResult::Pending)
     );
@@ -514,7 +512,7 @@ async fn handle_migrate(old_key: String) -> Response {
     }
 
     // Perform the migration
-    match dpapi::migrate_secrets(&old_key) {
+    match keystore::migrate_secrets(&old_key, &passphrase) {
         Ok((secrets, new_key, count)) => {
             // Store the migrated secrets in the current session
             let token: Vec<u8> = (0..32).map(|_| rand::random::<u8>()).collect();
@@ -544,121 +542,6 @@ async fn handle_migrate(old_key: String) -> Response {
                     .with_error(&e)
             );
             Response::error(format!("Migration failed: {}. Check that the old key is correct.", e))
-        }
-    }
-}
-
-/// Reveal all secrets using TOTP authentication (bypasses GUI challenge)
-async fn handle_reveal_all_totp(totp_code: String) -> Response {
-    let session = get_session().read().await;
-
-    if !session.is_active() {
-        audit::log_event(
-            AuditEvent::new(EventType::TfaRevealAll, EventResult::Failure)
-                .with_error("No active session")
-        );
-        return Response::error("No active session - authenticate first");
-    }
-
-    // Verify TOTP
-    match totp::verify_totp_code(&totp_code) {
-        Ok(true) => {}
-        Ok(false) => {
-            audit::log_event(
-                AuditEvent::new(EventType::TfaRevealAll, EventResult::Failure)
-                    .with_error("Invalid TOTP code")
-            );
-            return Response::error("Invalid 2FA code");
-        }
-        Err(e) => {
-            audit::log_event(
-                AuditEvent::new(EventType::TfaRevealAll, EventResult::Failure)
-                    .with_error(&e)
-            );
-            return Response::error(e);
-        }
-    }
-
-    match session.secrets() {
-        Some(secrets) => {
-            let count = secrets.len();
-            audit::log_event(
-                AuditEvent::new(EventType::TfaRevealAll, EventResult::Success)
-                    .with_secret_count(count)
-            );
-            Response::ok_with_data(ResponseData::RevealAll { secrets: secrets.clone() })
-        }
-        None => {
-            audit::log_event(
-                AuditEvent::new(EventType::TfaRevealAll, EventResult::Failure)
-                    .with_error("No secrets loaded")
-            );
-            Response::error("No secrets loaded")
-        }
-    }
-}
-
-/// Reveal a single secret using TOTP authentication (bypasses GUI challenge)
-async fn handle_reveal_totp(name: String, totp_code: String) -> Response {
-    let session = get_session().read().await;
-
-    if !session.is_active() {
-        audit::log_event(
-            AuditEvent::new(EventType::TfaReveal, EventResult::Failure)
-                .with_secret_name(&name)
-                .with_error("No active session")
-        );
-        return Response::error("No active session - authenticate first");
-    }
-
-    // Verify TOTP
-    match totp::verify_totp_code(&totp_code) {
-        Ok(true) => {}
-        Ok(false) => {
-            audit::log_event(
-                AuditEvent::new(EventType::TfaReveal, EventResult::Failure)
-                    .with_secret_name(&name)
-                    .with_error("Invalid TOTP code")
-            );
-            return Response::error("Invalid 2FA code");
-        }
-        Err(e) => {
-            audit::log_event(
-                AuditEvent::new(EventType::TfaReveal, EventResult::Failure)
-                    .with_secret_name(&name)
-                    .with_error(&e)
-            );
-            return Response::error(e);
-        }
-    }
-
-    match session.secrets() {
-        Some(secrets) => {
-            match secrets.get(&name) {
-                Some(value) => {
-                    audit::log_event(
-                        AuditEvent::new(EventType::TfaReveal, EventResult::Success)
-                            .with_secret_name(&name)
-                    );
-                    Response::ok_with_data(ResponseData::Reveal { value: value.clone() })
-                }
-                None => {
-                    audit::log_event(
-                        AuditEvent::new(EventType::TfaReveal, EventResult::Failure)
-                            .with_secret_name(&name)
-                            .with_error("Secret not found")
-                    );
-                    Response::error(format!("Secret '{}' not found", name))
-                }
-            }
-        }
-        None => {
-            audit::log_event(
-                AuditEvent::new(EventType::TfaReveal, EventResult::Failure)
-                    .with_secret_name(&name)
-                    .with_error("No secrets loaded")
-            );
-            Response::error("No secrets loaded")
         }
     }
 }
@@ -823,13 +706,13 @@ async fn handle_enable_tfa_unlock(totp_code: String) -> Response {
 
 /// Generate fresh encryption keys and reset the secret store
 /// Called during setup-2fa to ensure new auth = new keys = clean store
-async fn handle_initialize_keys() -> Response {
+async fn handle_initialize_keys(passphrase: String) -> Response {
     audit::log_event(
         AuditEvent::new(EventType::KeysInitialized, EventResult::Pending)
     );
 
-    // Step 1: Generate fresh DPAPI-encrypted master key
-    let master_key = match dpapi::generate_new_master_key() {
+    // Step 1: Generate fresh master key
+    let master_key = match keystore::generate_new_master_key() {
         Ok(k) => k,
         Err(e) => {
             audit::log_event(
@@ -840,8 +723,17 @@ async fn handle_initialize_keys() -> Response {
         }
     };
 
-    // Step 2: Delete old env files and create fresh empty store
-    if let Err(e) = dpapi::reset_encrypted_env(&master_key) {
+    // Step 2: Protect master key with passphrase (Argon2id + AES-256-GCM)
+    if let Err(e) = keystore::save_master_key(&master_key, &passphrase) {
+        audit::log_event(
+            AuditEvent::new(EventType::KeysInitialized, EventResult::Failure)
+                .with_error(&e)
+        );
+        return Response::error(format!("Failed to save master key: {}", e));
+    }
+
+    // Step 3: Create fresh empty secret store
+    if let Err(e) = keystore::reset_encrypted_env(&master_key) {
         audit::log_event(
             AuditEvent::new(EventType::KeysInitialized, EventResult::Failure)
                 .with_error(&e)
