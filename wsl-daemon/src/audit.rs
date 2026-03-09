@@ -62,6 +62,10 @@ pub enum EventType {
     TfaDisabled,
     /// 2FA re-enabled for reveal operations
     TfaEnabled,
+    /// 2FA disabled for unlock operations
+    TfaUnlockDisabled,
+    /// 2FA re-enabled for unlock operations
+    TfaUnlockEnabled,
     /// All secrets revealed via TOTP
     TfaRevealAll,
     /// Single secret revealed via TOTP

@@ -95,6 +95,9 @@ async fn handle_request(line: &str) -> Response {
         Request::CheckTfaState => handle_check_tfa_state().await,
         Request::DisableTfa { totp_code } => handle_disable_tfa(totp_code).await,
         Request::EnableTfa { totp_code } => handle_enable_tfa(totp_code).await,
+        Request::CheckTfaUnlockState => handle_check_tfa_state().await,
+        Request::DisableTfaUnlock { totp_code } => handle_disable_tfa_unlock(totp_code).await,
+        Request::EnableTfaUnlock { totp_code } => handle_enable_tfa_unlock(totp_code).await,
     }
 }
 
@@ -356,7 +359,7 @@ async fn handle_reveal_all_confirm(challenge: String, code: String) -> Response 
 /// Unlock secrets — uses TOTP + DPAPI when 2FA enabled, DPAPI-only when 2FA disabled
 async fn handle_unlock(ttl: Option<u64>, totp_code: String) -> Response {
     let ttl = ttl.unwrap_or(7200);  // Default 2 hours
-    let tfa_enabled = totp::is_tfa_enabled();
+    let tfa_enabled = totp::is_tfa_unlock_enabled();
 
     audit::log_simple(EventType::AuthAttempt, EventResult::Pending);
 
@@ -664,7 +667,8 @@ async fn handle_reveal_totp(name: String, totp_code: String) -> Response {
 async fn handle_check_tfa_state() -> Response {
     let configured = totp::is_totp_configured();
     let enabled = totp::is_tfa_enabled();
-    Response::ok_with_data(ResponseData::TfaState { configured, enabled })
+    let unlock_enabled = totp::is_tfa_unlock_enabled();
+    Response::ok_with_data(ResponseData::TfaState { configured, enabled, unlock_enabled })
 }
 
 /// Disable 2FA for reveal operations (requires valid TOTP to prove authenticator access)
@@ -736,6 +740,80 @@ async fn handle_enable_tfa(totp_code: String) -> Response {
         Err(e) => {
             audit::log_event(
                 AuditEvent::new(EventType::TfaEnabled, EventResult::Failure)
+                    .with_error(&e)
+            );
+            Response::error(e)
+        }
+    }
+}
+
+/// Disable 2FA for unlock operations (requires valid TOTP to prove authenticator access)
+async fn handle_disable_tfa_unlock(totp_code: String) -> Response {
+    match totp::verify_totp_code(&totp_code) {
+        Ok(true) => {}
+        Ok(false) => {
+            audit::log_event(
+                AuditEvent::new(EventType::TfaUnlockDisabled, EventResult::Failure)
+                    .with_error("Invalid TOTP code")
+            );
+            return Response::error("Invalid 2FA code");
+        }
+        Err(e) => {
+            audit::log_event(
+                AuditEvent::new(EventType::TfaUnlockDisabled, EventResult::Failure)
+                    .with_error(&e)
+            );
+            return Response::error(e);
+        }
+    }
+
+    match totp::set_tfa_unlock_state(false) {
+        Ok(()) => {
+            audit::log_event(
+                AuditEvent::new(EventType::TfaUnlockDisabled, EventResult::Success)
+            );
+            Response::ok()
+        }
+        Err(e) => {
+            audit::log_event(
+                AuditEvent::new(EventType::TfaUnlockDisabled, EventResult::Failure)
+                    .with_error(&e)
+            );
+            Response::error(e)
+        }
+    }
+}
+
+/// Re-enable 2FA for unlock operations (requires valid TOTP)
+async fn handle_enable_tfa_unlock(totp_code: String) -> Response {
+    match totp::verify_totp_code(&totp_code) {
+        Ok(true) => {}
+        Ok(false) => {
+            audit::log_event(
+                AuditEvent::new(EventType::TfaUnlockEnabled, EventResult::Failure)
+                    .with_error("Invalid TOTP code")
+            );
+            return Response::error("Invalid 2FA code");
+        }
+        Err(e) => {
+            audit::log_event(
+                AuditEvent::new(EventType::TfaUnlockEnabled, EventResult::Failure)
+                    .with_error(&e)
+            );
+            return Response::error(e);
+        }
+    }
+
+    match totp::set_tfa_unlock_state(true) {
+        Ok(()) => {
+            audit::log_event(
+                AuditEvent::new(EventType::TfaUnlockEnabled, EventResult::Success)
+            );
+            Response::ok()
+        }
+        Err(e) => {
+            audit::log_event(
+                AuditEvent::new(EventType::TfaUnlockEnabled, EventResult::Failure)
                     .with_error(&e)
             );
             Response::error(e)

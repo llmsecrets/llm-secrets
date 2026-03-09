@@ -128,6 +128,18 @@ pub enum Request {
     /// Re-enable 2FA for reveal operations (requires valid TOTP)
     #[serde(rename = "enable_tfa")]
     EnableTfa { totp_code: String },
+
+    /// Check 2FA unlock state (configured + enabled/disabled for unlock)
+    #[serde(rename = "check_tfa_unlock_state")]
+    CheckTfaUnlockState,
+
+    /// Disable 2FA for unlock operations (requires valid TOTP)
+    #[serde(rename = "disable_tfa_unlock")]
+    DisableTfaUnlock { totp_code: String },
+
+    /// Re-enable 2FA for unlock operations (requires valid TOTP)
+    #[serde(rename = "enable_tfa_unlock")]
+    EnableTfaUnlock { totp_code: String },
 }
 
 /// Response from daemon to client
@@ -160,7 +172,7 @@ pub enum ResponseData {
     Extended { remaining: i64 },
     BackupKey { key: String },
     Migrated { count: usize },
-    TfaState { configured: bool, enabled: bool },
+    TfaState { configured: bool, enabled: bool, unlock_enabled: bool },
 }
 
 #[derive(Debug, Serialize)]

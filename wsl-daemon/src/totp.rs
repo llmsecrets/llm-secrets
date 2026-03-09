@@ -132,6 +132,51 @@ pub fn set_tfa_state(enabled: bool) -> Result<(), String> {
     Ok(())
 }
 
+/// Get the path to the 2FA unlock state file
+pub fn get_tfa_unlock_state_path() -> PathBuf {
+    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/tmp"));
+    home.join(".scrt2").join("2fa-unlock.state")
+}
+
+/// Check if 2FA is enabled for unlock operations.
+/// Returns true if TOTP is configured AND unlock state is not explicitly "disabled".
+/// Default (no state file) = enabled when TOTP is configured.
+pub fn is_tfa_unlock_enabled() -> bool {
+    if !is_totp_configured() {
+        return false;
+    }
+    let state_path = get_tfa_unlock_state_path();
+    match std::fs::read_to_string(&state_path) {
+        Ok(contents) => contents.trim() != "disabled",
+        Err(_) => true, // File absent + totp configured = enabled
+    }
+}
+
+/// Set the 2FA unlock state (enabled or disabled).
+/// Writes to ~/.scrt2/2fa-unlock.state with 0600 permissions.
+pub fn set_tfa_unlock_state(enabled: bool) -> Result<(), String> {
+    let state_path = get_tfa_unlock_state_path();
+
+    // Create parent directory
+    if let Some(parent) = state_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create ~/.scrt2 directory: {}", e))?;
+    }
+
+    let content = if enabled { "enabled" } else { "disabled" };
+    std::fs::write(&state_path, content)
+        .map_err(|e| format!("Failed to write 2FA unlock state: {}", e))?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&state_path, std::fs::Permissions::from_mode(0o600))
+            .map_err(|e| format!("Failed to set permissions on 2FA unlock state file: {}", e))?;
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
