@@ -86,7 +86,7 @@ cmd_unlock() {
         # 2FA disabled — GUI challenge to prove user presence, then DPAPI-only unlock
         if ! command -v zenity &>/dev/null; then
             echo -e "${RED}zenity required when 2FA is disabled. Install: sudo apt install zenity${NC}" >&2
-            echo -e "${YELLOW}Or re-enable 2FA: scrt2 2fa-reenable${NC}"
+            echo -e "${YELLOW}Or re-enable 2FA: scrt2 2fa-on${NC}"
             return 1
         fi
 
@@ -347,7 +347,7 @@ cmd_setup_2fa() {
             echo -e "${CYAN}Audit logs and shell history flushed.${NC}"
             echo ""
             echo -e "${YELLOW}Tip: 2FA is mainly useful for remote access (e.g. Claude Code from your phone).${NC}"
-            echo -e "${YELLOW}For local use, you can disable it:  scrt2 2fa-disable${NC}"
+            echo -e "${YELLOW}For local use, you can disable it:  scrt2 2fa-off${NC}"
             ;;
 
         qr)
@@ -454,7 +454,7 @@ cmd_setup_2fa() {
             echo -e "${CYAN}Audit logs and shell history flushed.${NC}"
             echo ""
             echo -e "${YELLOW}Tip: 2FA is mainly useful for remote access (e.g. Claude Code from your phone).${NC}"
-            echo -e "${YELLOW}For local use, you can disable it:  scrt2 2fa-disable${NC}"
+            echo -e "${YELLOW}For local use, you can disable it:  scrt2 2fa-off${NC}"
             ;;
 
         agent)
@@ -546,7 +546,7 @@ cmd_setup_2fa() {
             echo -e "${CYAN}Audit logs and shell history flushed.${NC}"
             echo ""
             echo -e "${YELLOW}Tip: 2FA is mainly useful for remote access (e.g. Claude Code from your phone).${NC}"
-            echo -e "${YELLOW}For local use, you can disable it:  scrt2 2fa-disable${NC}"
+            echo -e "${YELLOW}For local use, you can disable it:  scrt2 2fa-off${NC}"
             ;;
 
         *)
@@ -633,7 +633,7 @@ cmd_view() {
         # ── GUI challenge mode (existing behavior when 2FA is disabled) ──
         if ! command -v zenity &>/dev/null; then
             echo -e "${RED}zenity required when 2FA is disabled. Install: sudo apt install zenity${NC}" >&2
-            echo -e "${YELLOW}Or re-enable 2FA: scrt2 2fa-reenable${NC}"
+            echo -e "${YELLOW}Or re-enable 2FA: scrt2 2fa-on${NC}"
             return 1
         fi
 
@@ -685,7 +685,7 @@ cmd_view() {
     fi
 }
 
-cmd_2fa_disable() {
+cmd_2fa_off() {
     local totp_code="${1:-}"
 
     if [ -z "$totp_code" ]; then
@@ -706,7 +706,7 @@ cmd_2fa_disable() {
     if [ "$success" = "true" ]; then
         echo -e "${GREEN}2FA disabled.${NC}"
         echo -e "${YELLOW}Unlock and view no longer require Google Auth code.${NC}"
-        echo -e "${YELLOW}View will use GUI challenge. Re-enable with: scrt2 2fa-reenable${NC}"
+        echo -e "${YELLOW}View will use GUI challenge. Re-enable with: scrt2 2fa-on${NC}"
         # Confirm session is still active
         local status_response
         status_response=$(send_request '{"method":"status"}')
@@ -723,7 +723,7 @@ cmd_2fa_disable() {
     fi
 }
 
-cmd_2fa_reenable() {
+cmd_2fa_on() {
     local totp_code="${1:-}"
 
     if [ -z "$totp_code" ]; then
@@ -2009,8 +2009,8 @@ cmd_menu() {
         "recover" "Recover master key from backup file" \
         "backup-guide" "Backup & recovery guide (notepad)" \
         "setup-2fa" "Configure 2FA authentication" \
-        "2fa-disable" "Disable 2FA for view" \
-        "2fa-reenable" "Re-enable 2FA for view" \
+        "2fa-off" "Turn off 2FA for view" \
+        "2fa-on" "Turn on 2FA for view" \
         "check-totp" "Check TOTP configuration" \
         "logout" "Clear session" \
         --ok-label="  Run  " \
@@ -2270,8 +2270,8 @@ GUIREADMEEOF
                 backup-key) cmd_backup_key ;;
                 backup-guide) cmd_backup_guide ;;
                 setup-2fa)  cmd_setup_2fa ;;
-                2fa-disable)  cmd_2fa_disable ;;
-                2fa-reenable) cmd_2fa_reenable ;;
+                2fa-off)  cmd_2fa_off ;;
+                2fa-on) cmd_2fa_on ;;
                 check-totp) cmd_check_totp ;;
                 logout)     cmd_logout ;;
             esac
@@ -2298,8 +2298,8 @@ cmd_help() {
     echo "  run <command>     Run command with \$env[NAME] substitution"
     echo "  add [KEY=val ...]  Add secrets (GUI notepad if no args, or KEY=value on command line)"
     echo "  view [code]       View secrets (2FA prompt or pass code; GUI challenge if 2FA disabled)"
-    echo "  2fa-disable [code] Disable 2FA for view (falls back to GUI challenge)"
-    echo "  2fa-reenable [code] Re-enable 2FA for view (uses existing TOTP secret)"
+    echo "  2fa-off [code]           Turn off 2FA for view (falls back to GUI challenge)"
+    echo "  2fa-on [code]            Turn on 2FA for view (uses existing TOTP secret)"
     echo "  extend [ttl]      Reset session timer"
     echo "  logout            Clear session (aliases: lock, clear)"
     echo "  check-totp        Check TOTP configuration status"
@@ -2367,8 +2367,8 @@ case "$1" in
     setup-2fa)    shift; cmd_setup_2fa "$@" ;;
     extend)       shift; cmd_extend "$@" ;;
     view)         shift; cmd_view "$@" ;;
-    2fa-disable)  shift; cmd_2fa_disable "$@" ;;
-    2fa-reenable) shift; cmd_2fa_reenable "$@" ;;
+    2fa-off)  shift; cmd_2fa_off "$@" ;;
+    2fa-on) shift; cmd_2fa_on "$@" ;;
     add)          shift; cmd_add "$@" ;;
     migrate)      shift; cmd_migrate "$@" ;;
     backup-vault) shift; cmd_backup_vault "$@" ;;
