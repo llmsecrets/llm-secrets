@@ -237,6 +237,53 @@ cmd_setup_2fa() {
     mkdir -p "$(dirname "$TOTP_SECRET_FILE")"
     chmod 700 "$(dirname "$TOTP_SECRET_FILE")"
 
+    # ── Warning: check for existing secrets before key regeneration ──
+    local _existing_secrets=0
+    local _list_resp
+    _list_resp=$(send_request '{"method":"list"}' 2>/dev/null) && {
+        _existing_secrets=$(echo "$_list_resp" | jq -r '.data.names | length // 0' 2>/dev/null)
+    }
+    # Fallback: check vault files on disk if daemon isn't unlocked
+    if [ "$_existing_secrets" -eq 0 ] 2>/dev/null; then
+        local _appdata_win
+        _appdata_win=$(cmd.exe /c "echo %APPDATA%" 2>/dev/null | tr -d '\r')
+        if [ -n "$_appdata_win" ]; then
+            local _dl=$(echo "$_appdata_win" | cut -c1 | tr 'A-Z' 'a-z')
+            local _rp=$(echo "$_appdata_win" | cut -c3- | tr '\\' '/')
+            local _vault_env="/mnt/${_dl}${_rp}/LLM Secrets 2/env"
+            for _f in "$_vault_env"/.env.encrypted.*; do
+                if [ -f "$_f" ]; then
+                    _existing_secrets=1
+                    break
+                fi
+            done
+        fi
+    fi
+
+    if [ "$_existing_secrets" -gt 0 ] 2>/dev/null; then
+        echo ""
+        echo -e "${RED}╔══════════════════════════════════════════════════════════╗${NC}"
+        echo -e "${RED}║  WARNING: You have existing secrets in your vault!      ║${NC}"
+        echo -e "${RED}╠══════════════════════════════════════════════════════════╣${NC}"
+        echo -e "${RED}║  Setting up 2FA generates new encryption keys.          ║${NC}"
+        echo -e "${RED}║  ALL existing secrets will be permanently deleted.      ║${NC}"
+        echo -e "${RED}╠══════════════════════════════════════════════════════════╣${NC}"
+        echo -e "${RED}║  Before proceeding, you should:                         ║${NC}"
+        echo -e "${RED}║    1. Run 'scrt2 backup-key --save ~/Desktop'           ║${NC}"
+        echo -e "${RED}║       (saves encrypted master key backup)               ║${NC}"
+        echo -e "${RED}║    2. Run 'scrt2 view' and copy your secret values      ║${NC}"
+        echo -e "${RED}║    3. After setup, re-add with 'scrt2 add KEY=value'    ║${NC}"
+        echo -e "${RED}╚══════════════════════════════════════════════════════════╝${NC}"
+        echo ""
+        echo -n "Type YES to proceed, or anything else to abort: "
+        read -r _confirm
+        if [ "$_confirm" != "YES" ]; then
+            echo -e "${YELLOW}Aborted. Your secrets are safe.${NC}"
+            return 0
+        fi
+        echo ""
+    fi
+
     case "$mode" in
         manual)
             # ── Manual entry: user pastes base32 secret directly ──
