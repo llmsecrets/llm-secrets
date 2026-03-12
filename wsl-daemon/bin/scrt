@@ -17,10 +17,11 @@ NC='\033[0m'
 
 send_request() {
     local json="$1"
+    local timeout="${2:-5}"  # Default 5s, override for long-running ops
     if command -v socat &>/dev/null; then
-        echo "$json" | socat - UNIX-CONNECT:"$SOCKET" 2>/dev/null
+        echo "$json" | socat -t "$timeout" - UNIX-CONNECT:"$SOCKET" 2>/dev/null
     elif command -v nc &>/dev/null; then
-        echo "$json" | nc -U -w 2 "$SOCKET" 2>/dev/null
+        echo "$json" | nc -U -w "$timeout" "$SOCKET" 2>/dev/null
     else
         echo '{"success":false,"error":"No socket client (socat or nc) found"}'
     fi
@@ -28,12 +29,145 @@ send_request() {
 
 cmd_unlock() {
     local ttl="${1:-7200}"
+
+    echo -e "${CYAN}Authenticating with Windows Hello...${NC}"
+
+    # Resolve Windows APPDATA path
+    local appdata_win
+    appdata_win=$(cmd.exe /c "echo %APPDATA%" 2>/dev/null | tr -d '\r')
+    if [ -z "$appdata_win" ]; then
+        echo -e "${RED}Could not detect Windows APPDATA path.${NC}" >&2
+        return 1
+    fi
+    local drive_letter=$(echo "$appdata_win" | cut -c1 | tr 'A-Z' 'a-z')
+    local rest=$(echo "$appdata_win" | cut -c3- | tr '\\' '/')
+    local llm_dir="/mnt/${drive_letter}${rest}/LLM Secrets"
+
+    # Check WindowsHelloAuth.exe exists
+    if [ ! -f "${llm_dir}/WindowsHelloAuth.exe" ]; then
+        echo -e "${RED}WindowsHelloAuth.exe not found. Install the LLM Secrets desktop app.${NC}" >&2
+        return 1
+    fi
+
+    # Convert WSL path to Windows path for PowerShell
+    local auth_exe_win="${appdata_win}\\LLM Secrets\\WindowsHelloAuth.exe"
+
+    # Step 1: Run Windows Hello authentication via PowerShell (interactive — waits for user)
+    local ps_script
+    ps_script="\$ErrorActionPreference = 'Stop'
+\$authExe = '${auth_exe_win}'
+if (-not (Test-Path \$authExe)) { Write-Host 'EXE_NOT_FOUND'; exit 1 }
+\$proc = Start-Process -FilePath \$authExe -Wait -PassThru
+if (\$proc.ExitCode -ne 0) { Write-Host 'AUTH_FAILED'; exit 1 }
+Write-Host 'AUTH_OK'"
+
+    local encoded_auth
+    encoded_auth=$(printf '%s' "$ps_script" | iconv -f UTF-8 -t UTF-16LE | base64 -w 0)
+
+    local auth_result
+    auth_result=$(powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand "$encoded_auth" 2>/dev/null | tr -d '\r')
+
+    if [ "$auth_result" != "AUTH_OK" ]; then
+        echo -e "${RED}Windows Hello authentication failed or was cancelled.${NC}" >&2
+        return 1
+    fi
+
+    echo -e "${GREEN}Windows Hello authenticated.${NC}"
+
+    # Step 2: Retrieve DPAPI master key + decrypt secrets via PowerShell
+    local ps_decrypt
+    ps_decrypt=$(cat <<'PSEOF'
+$ErrorActionPreference = 'Stop'
+try {
+    $keyFile = Join-Path $env:APPDATA 'LLM Secrets\credentials\EnvCrypto_DpapiMasterKey.dat'
+    if (-not (Test-Path $keyFile)) { Write-Host "KEY_NOT_FOUND"; exit 1 }
+    $keyData = Get-Content $keyFile -Raw | ConvertFrom-Json
+    $secureKey = ConvertTo-SecureString -String $keyData.EncryptedKey
+    $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureKey)
+    $masterKey = [Runtime.InteropServices.Marshal]::PtrToStringAuto($bstr)
+    [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
+
+    $envDir = Join-Path $env:APPDATA 'LLM Secrets\env'
+    $latest = Get-ChildItem $envDir -Filter '.env.encrypted.v*' |
+        Sort-Object { [int]($_.Name -replace '.*v(\d+)$','$1') } |
+        Select-Object -Last 1
+    if (-not $latest) { Write-Host "NO_ENV_FILE"; exit 1 }
+
+    $content = Get-Content $latest.FullName -Raw -Encoding UTF8
+    $content = $content -replace '^\xEF\xBB\xBF',''
+    $json = $content | ConvertFrom-Json
+    $encBytes = [Convert]::FromBase64String($json.Data)
+    $keyBytes = [Convert]::FromBase64String($masterKey)
+    $iv = $encBytes[0..15]
+    $ct = $encBytes[16..($encBytes.Length - 1)]
+    $aes = [Security.Cryptography.Aes]::Create()
+    $aes.Key = $keyBytes; $aes.IV = $iv
+    $aes.Mode = [Security.Cryptography.CipherMode]::CBC
+    $aes.Padding = [Security.Cryptography.PaddingMode]::PKCS7
+    $dec = $aes.CreateDecryptor()
+    $plain = [Text.Encoding]::UTF8.GetString($dec.TransformFinalBlock($ct, 0, $ct.Length))
+
+    $secrets = @{}
+    foreach ($line in $plain -split "`n") {
+        $t = $line.Trim()
+        if ($t -and -not $t.StartsWith('#')) {
+            $eq = $t.IndexOf('=')
+            if ($eq -gt 0) {
+                $k = $t.Substring(0, $eq).Trim()
+                $v = $t.Substring($eq + 1)
+                $secrets[$k] = $v
+            }
+        }
+    }
+    $secrets | ConvertTo-Json -Compress
+} catch {
+    Write-Host "DECRYPT_ERROR: $_"
+    exit 1
+}
+PSEOF
+)
+    local encoded_decrypt
+    encoded_decrypt=$(printf '%s' "$ps_decrypt" | iconv -f UTF-8 -t UTF-16LE | base64 -w 0)
+
+    echo -e "${CYAN}Decrypting secrets...${NC}"
+    local secrets_json
+    secrets_json=$(powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand "$encoded_decrypt" 2>/dev/null | tr -d '\r')
+
+    # Check for error responses
+    case "$secrets_json" in
+        KEY_NOT_FOUND)
+            echo -e "${RED}DPAPI master key not found. Set up vault in LLM Secrets desktop app first.${NC}" >&2
+            return 1 ;;
+        NO_ENV_FILE)
+            echo -e "${RED}No encrypted env file found.${NC}" >&2
+            return 1 ;;
+        DECRYPT_ERROR*)
+            echo -e "${RED}${secrets_json}${NC}" >&2
+            return 1 ;;
+    esac
+
+    # Validate JSON
+    if ! echo "$secrets_json" | jq empty 2>/dev/null; then
+        echo -e "${RED}Failed to decrypt secrets (invalid output).${NC}" >&2
+        return 1
+    fi
+
+    # Step 3: Generate random token and store secrets in daemon
+    local store_json
+    store_json=$(python3 -c "
+import json, sys, base64, os
+secrets = json.loads(sys.stdin.read())
+token = base64.b64encode(os.urandom(32)).decode()
+print(json.dumps({'method':'store','params':{'token':token,'secrets':secrets,'ttl':$ttl}}))
+" <<< "$secrets_json")
+
     local response
-    response=$(send_request "{\"method\":\"unlock\",\"params\":{\"ttl\":$ttl}}")
+    response=$(send_request "$store_json" 10)
 
     local success=$(echo "$response" | jq -r '.success // false')
     if [ "$success" = "true" ]; then
-        local count=$(echo "$response" | jq -r '.data.count // 0')
+        local count
+        count=$(echo "$secrets_json" | jq 'length')
         echo -e "${GREEN}Unlocked ${count} secret(s).${NC}"
     else
         local error=$(echo "$response" | jq -r '.error // "Unknown error"')
@@ -257,6 +391,184 @@ cmd_backup_key() {
     fi
 }
 
+cmd_backup() {
+    local local_dest=""
+
+    # Parse --local flag
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --local)
+                local_dest="${2:-}"
+                if [ -z "$local_dest" ]; then
+                    echo -e "${RED}Usage: scrt backup --local <path>${NC}" >&2
+                    return 1
+                fi
+                shift 2
+                ;;
+            *)
+                echo -e "${RED}Unknown option: $1${NC}" >&2
+                echo "Usage: scrt backup [--local <path>]" >&2
+                return 1
+                ;;
+        esac
+    done
+
+    # Detect vault path via Windows APPDATA
+    local appdata_win
+    appdata_win=$(cmd.exe /c "echo %APPDATA%" 2>/dev/null | tr -d '\r')
+    if [ -z "$appdata_win" ]; then
+        echo -e "${RED}Could not detect Windows APPDATA path${NC}" >&2
+        return 1
+    fi
+
+    # Convert Windows path to WSL path
+    local drive_letter=$(echo "$appdata_win" | cut -c1 | tr 'A-Z' 'a-z')
+    local rest=$(echo "$appdata_win" | cut -c3- | tr '\\' '/')
+    local vault_dir="/mnt/${drive_letter}${rest}/LLM Secrets/env"
+
+    if [ ! -d "$vault_dir" ]; then
+        echo -e "${RED}Vault not found at: ${vault_dir}${NC}" >&2
+        return 1
+    fi
+
+    # Count vault files
+    local main_count=0 backup_count=0
+    for f in "$vault_dir"/.env.encrypted.*; do
+        [ -f "$f" ] && main_count=$((main_count + 1))
+    done
+    if [ -d "$vault_dir/backup" ]; then
+        for f in "$vault_dir/backup"/.env.encrypted.*; do
+            [ -f "$f" ] && backup_count=$((backup_count + 1))
+        done
+    fi
+
+    if [ "$main_count" -eq 0 ]; then
+        echo -e "${RED}No encrypted vault files found in: ${vault_dir}${NC}" >&2
+        return 1
+    fi
+
+    local timestamp=$(date +%Y-%m-%d)
+    local zip_name="scrt-backup-${timestamp}.zip"
+    local tmp_dir=$(mktemp -d)
+    local staging="${tmp_dir}/${zip_name%.zip}"
+    local zip_path="${tmp_dir}/${zip_name}"
+
+    echo -e "${CYAN}Backing up vault (${main_count} main + ${backup_count} backup files)...${NC}"
+
+    # Stage files
+    mkdir -p "${staging}/backup"
+    for f in "$vault_dir"/.env.encrypted.*; do
+        [ -f "$f" ] && cp "$f" "${staging}/"
+    done
+    if [ -d "$vault_dir/backup" ]; then
+        for f in "$vault_dir/backup"/.env.encrypted.*; do
+            [ -f "$f" ] && cp "$f" "${staging}/backup/"
+        done
+    fi
+
+    # Create zip
+    (cd "$tmp_dir" && zip -rq "$zip_path" "${zip_name%.zip}/")
+    local zip_size=$(stat -c%s "$zip_path" 2>/dev/null || stat -f%z "$zip_path" 2>/dev/null)
+    echo -e "${GREEN}Created ${zip_name} (${zip_size} bytes)${NC}"
+
+    # Local backup mode
+    if [ -n "$local_dest" ]; then
+        if [ ! -d "$local_dest" ]; then
+            echo -e "${RED}Directory not found: ${local_dest}${NC}" >&2
+            rm -rf "$tmp_dir"
+            return 1
+        fi
+        cp "$zip_path" "${local_dest}/${zip_name}"
+        echo -e "${GREEN}Saved to: ${local_dest}/${zip_name}${NC}"
+        rm -rf "$tmp_dir"
+        return 0
+    fi
+
+    # Google Drive upload via scrt run + Python
+    echo -e "${CYAN}Uploading to Google Drive...${NC}"
+
+    local upload_script="${tmp_dir}/upload.py"
+    cat > "$upload_script" << 'PYEOF'
+#!/usr/bin/env python3
+"""Upload a file to Google Drive. Reads credentials from stdin."""
+import sys, os, json, re, urllib.request, urllib.parse
+
+file_path = sys.argv[1]
+file_name = os.path.basename(file_path)
+
+creds_raw = sys.stdin.read().strip()
+
+client_id = re.search(r"client_id:([^,}]+)", creds_raw)
+client_secret = re.search(r"client_secret:([^,}]+)", creds_raw)
+refresh_token = re.search(r"refresh_token:([^,}]+)", creds_raw)
+token_uri = re.search(r"token_uri:([^,}]+)", creds_raw)
+
+if not all([client_id, client_secret, refresh_token, token_uri]):
+    print("ERROR: Could not parse credentials", file=sys.stderr)
+    sys.exit(1)
+
+client_id = client_id.group(1).strip()
+client_secret = client_secret.group(1).strip()
+refresh_token = refresh_token.group(1).strip()
+token_uri = token_uri.group(1).strip()
+
+data = urllib.parse.urlencode({
+    "client_id": client_id, "client_secret": client_secret,
+    "refresh_token": refresh_token, "grant_type": "refresh_token"
+}).encode()
+req = urllib.request.Request(token_uri, data=data, method="POST")
+resp = json.loads(urllib.request.urlopen(req).read())
+access_token = resp["access_token"]
+
+file_size = os.path.getsize(file_path)
+boundary = "----ScrtBackupBoundary"
+metadata = json.dumps({"name": file_name}).encode()
+
+with open(file_path, "rb") as f:
+    file_data = f.read()
+
+body = (
+    f"--{boundary}\r\n"
+    f"Content-Type: application/json; charset=UTF-8\r\n\r\n"
+).encode() + metadata + (
+    f"\r\n--{boundary}\r\n"
+    f"Content-Type: application/zip\r\n\r\n"
+).encode() + file_data + f"\r\n--{boundary}--".encode()
+
+req = urllib.request.Request(
+    "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart",
+    data=body,
+    headers={
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": f"multipart/related; boundary={boundary}",
+    },
+    method="POST"
+)
+
+resp = json.loads(urllib.request.urlopen(req).read())
+print(json.dumps({"id": resp["id"], "name": resp["name"]}))
+PYEOF
+
+    local result
+    result=$("$CLIENT" run 'echo "$env[personal_google_workspace]" | python3 '"${upload_script} ${zip_path}")
+
+    if [ $? -ne 0 ] || [ -z "$result" ]; then
+        echo -e "${RED}Upload failed. Is personal_google_workspace secret available?${NC}" >&2
+        echo -e "${YELLOW}Backup zip preserved at: ${zip_path}${NC}"
+        return 1
+    fi
+
+    local file_id=$(echo "$result" | jq -r '.id')
+    local file_name_out=$(echo "$result" | jq -r '.name')
+
+    echo -e "${GREEN}Uploaded successfully!${NC}"
+    echo -e "  Name: ${file_name_out}"
+    echo -e "  Link: ${CYAN}https://drive.google.com/file/d/${file_id}/view${NC}"
+
+    # Cleanup
+    rm -rf "$tmp_dir"
+}
+
 cmd_help() {
     echo "scrt v${VERSION} - WSL2 secure secret injector"
     echo ""
@@ -274,6 +586,7 @@ cmd_help() {
     echo "  logout            Clear session (aliases: lock, clear)"
     echo "  check-hello       Check Windows Hello availability"
     echo "  migrate <key>     Migrate secrets from old master key"
+    echo "  backup [--local]  Backup encrypted vault to Google Drive (or local)"
     echo "  backup-key        Show current master key"
     echo "  help              Show this help"
     echo ""
@@ -281,9 +594,11 @@ cmd_help() {
     echo "  scrt unlock                    # Authenticate (2 hour session)"
     echo "  scrt unlock 28800              # 8 hour session"
     echo "  scrt list                      # List secret names"
-    echo "  scrt run 'curl -H \"Auth: Bearer \$env[API_KEY]\" https://api.example.com'"
+    echo "  scrt run 'curl -H \"Authorization: Bearer \$env[API_KEY]\" https://api.example.com'"
     echo "  scrt add API_KEY=sk-123        # Add a secret"
     echo "  scrt view                      # View secrets in GUI"
+    echo "  scrt backup                    # Backup vault to Google Drive"
+    echo "  scrt backup --local ~/backups  # Backup vault locally"
 }
 
 # Check daemon is running
@@ -304,6 +619,7 @@ case "${1:-help}" in
     view)         cmd_view ;;
     add)          shift; cmd_add "$@" ;;
     migrate)      shift; cmd_migrate "$@" ;;
+    backup)       shift; cmd_backup "$@" ;;
     backup-key)   cmd_backup_key ;;
     help|--help|-h) cmd_help ;;
     -v|--version) echo "scrt v${VERSION}" ;;
