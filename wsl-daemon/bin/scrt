@@ -4,10 +4,10 @@
 
 set -euo pipefail
 
-VERSION="0.3.0"
+VERSION="0.4.0"
 SOCKET="${XDG_RUNTIME_DIR:-/tmp}/scrt.sock"
 CLIENT="scrt-client"
-TOTP_SECRET_FILE="$HOME/.scrt/totp.secret"
+BACKUP_FILENAME="encrypted-master-key-instructions.json"
 
 # Colors
 RED='\033[0;31m'
@@ -18,62 +18,171 @@ NC='\033[0m'
 
 send_request() {
     local json="$1"
+    local timeout="${2:-5}"  # Default 5s, override for long-running ops
     if command -v socat &>/dev/null; then
-        echo "$json" | socat - UNIX-CONNECT:"$SOCKET" 2>/dev/null
+        echo "$json" | socat -t "$timeout" - UNIX-CONNECT:"$SOCKET" 2>/dev/null
     elif command -v nc &>/dev/null; then
-        echo "$json" | nc -U -w 2 "$SOCKET" 2>/dev/null
+        echo "$json" | nc -U -w "$timeout" "$SOCKET" 2>/dev/null
     else
         echo '{"success":false,"error":"No socket client (socat or nc) found"}'
     fi
 }
 
-# Compute TOTP code from stored secret using Python3 stdlib
-compute_totp() {
-    if [ ! -f "$TOTP_SECRET_FILE" ]; then
-        echo -e "${RED}TOTP not configured. Run 'scrt setup-totp' first.${NC}" >&2
+# Resolve Windows APPDATA and LLM Secrets paths (cached)
+_APPDATA_WIN=""
+_LLM_DIR=""
+resolve_paths() {
+    if [ -n "$_APPDATA_WIN" ]; then return 0; fi
+
+    _APPDATA_WIN=$(cmd.exe /c "echo %APPDATA%" 2>/dev/null | tr -d '\r')
+    if [ -z "$_APPDATA_WIN" ]; then
+        echo -e "${RED}Could not detect Windows APPDATA path.${NC}" >&2
+        return 1
+    fi
+    local drive_letter=$(echo "$_APPDATA_WIN" | cut -c1 | tr 'A-Z' 'a-z')
+    local rest=$(echo "$_APPDATA_WIN" | cut -c3- | tr '\\' '/')
+    _LLM_DIR="/mnt/${drive_letter}${rest}/LLM Secrets"
+}
+
+# Run Windows Hello authentication via PowerShell → WindowsHelloAuth.exe
+# Returns 0 on success, 1 on failure
+require_auth() {
+    local message="${1:-Scrt - Authenticate to continue}"
+
+    resolve_paths || return 1
+
+    if [ ! -f "${_LLM_DIR}/WindowsHelloAuth.exe" ]; then
+        echo -e "${RED}WindowsHelloAuth.exe not found. Install the LLM Secrets desktop app.${NC}" >&2
         return 1
     fi
 
-    local secret
-    secret=$(cat "$TOTP_SECRET_FILE")
+    local auth_exe_win="${_APPDATA_WIN}\\LLM Secrets\\WindowsHelloAuth.exe"
 
-    python3 -c "
-import hmac, hashlib, struct, time, base64
+    local ps_script
+    ps_script="\$ErrorActionPreference = 'Stop'
+\$authExe = '${auth_exe_win}'
+if (-not (Test-Path \$authExe)) { Write-Host 'EXE_NOT_FOUND'; exit 1 }
+\$proc = Start-Process -FilePath \$authExe -ArgumentList '${message}' -Wait -PassThru -WindowStyle Hidden
+if (\$proc.ExitCode -ne 0) { Write-Host 'AUTH_FAILED'; exit 1 }
+Write-Host 'AUTH_OK'"
 
-secret_b32 = '$secret'.strip()
-# Decode base32 secret (add padding if needed)
-padding = '=' * ((8 - len(secret_b32) % 8) % 8)
-key = base64.b32decode(secret_b32 + padding, casefold=True)
+    local encoded_auth
+    encoded_auth=$(printf '%s' "$ps_script" | iconv -f UTF-8 -t UTF-16LE | base64 -w 0)
 
-# TOTP: current time step
-counter = int(time.time()) // 30
-msg = struct.pack('>Q', counter)
+    local auth_result
+    auth_result=$(powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand "$encoded_auth" 2>/dev/null | tr -d '\r')
 
-# HMAC-SHA1
-h = hmac.new(key, msg, hashlib.sha1).digest()
-
-# Dynamic truncation
-offset = h[-1] & 0x0F
-code = struct.unpack('>I', h[offset:offset+4])[0] & 0x7FFFFFFF
-code = code % 10**6
-
-print(f'{code:06d}')
-"
+    if [ "$auth_result" != "AUTH_OK" ]; then
+        echo -e "${RED}Windows Hello authentication failed or was cancelled.${NC}" >&2
+        return 1
+    fi
 }
 
 cmd_unlock() {
     local ttl="${1:-7200}"
 
-    # Auto-compute TOTP code
-    local totp_code
-    totp_code=$(compute_totp) || return 1
+    echo -e "${CYAN}Authenticating with Windows Hello...${NC}"
+
+    require_auth "Scrt - Unlock secret vault" || return 1
+
+    echo -e "${GREEN}Windows Hello authenticated.${NC}"
+
+    resolve_paths || return 1
+
+    # Retrieve DPAPI master key + decrypt secrets via PowerShell
+    local ps_decrypt
+    ps_decrypt=$(cat <<'PSEOF'
+$ErrorActionPreference = 'Stop'
+try {
+    $keyFile = Join-Path $env:APPDATA 'LLM Secrets\credentials\EnvCrypto_DpapiMasterKey.dat'
+    if (-not (Test-Path $keyFile)) { Write-Host "KEY_NOT_FOUND"; exit 1 }
+    $keyData = Get-Content $keyFile -Raw | ConvertFrom-Json
+    $secureKey = ConvertTo-SecureString -String $keyData.EncryptedKey
+    $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureKey)
+    $masterKey = [Runtime.InteropServices.Marshal]::PtrToStringAuto($bstr)
+    [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
+
+    $envDir = Join-Path $env:APPDATA 'LLM Secrets\env'
+    $latest = Get-ChildItem $envDir -Filter '.env.encrypted.v*' |
+        Sort-Object { [int]($_.Name -replace '.*v(\d+)$','$1') } |
+        Select-Object -Last 1
+    if (-not $latest) { Write-Host "NO_ENV_FILE"; exit 1 }
+
+    $content = Get-Content $latest.FullName -Raw -Encoding UTF8
+    $content = $content -replace '^\xEF\xBB\xBF',''
+    $json = $content | ConvertFrom-Json
+    $encBytes = [Convert]::FromBase64String($json.Data)
+    $keyBytes = [Convert]::FromBase64String($masterKey)
+    $iv = $encBytes[0..15]
+    $ct = $encBytes[16..($encBytes.Length - 1)]
+    $aes = [Security.Cryptography.Aes]::Create()
+    $aes.Key = $keyBytes; $aes.IV = $iv
+    $aes.Mode = [Security.Cryptography.CipherMode]::CBC
+    $aes.Padding = [Security.Cryptography.PaddingMode]::PKCS7
+    $dec = $aes.CreateDecryptor()
+    $plain = [Text.Encoding]::UTF8.GetString($dec.TransformFinalBlock($ct, 0, $ct.Length))
+
+    $secrets = @{}
+    foreach ($line in $plain -split "`n") {
+        $t = $line.Trim()
+        if ($t -and -not $t.StartsWith('#')) {
+            $eq = $t.IndexOf('=')
+            if ($eq -gt 0) {
+                $k = $t.Substring(0, $eq).Trim()
+                $v = $t.Substring($eq + 1)
+                $secrets[$k] = $v
+            }
+        }
+    }
+    $secrets | ConvertTo-Json -Compress
+} catch {
+    Write-Host "DECRYPT_ERROR: $_"
+    exit 1
+}
+PSEOF
+)
+    local encoded_decrypt
+    encoded_decrypt=$(printf '%s' "$ps_decrypt" | iconv -f UTF-8 -t UTF-16LE | base64 -w 0)
+
+    echo -e "${CYAN}Decrypting secrets...${NC}"
+    local secrets_json
+    secrets_json=$(powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand "$encoded_decrypt" 2>/dev/null | tr -d '\r')
+
+    # Check for error responses
+    case "$secrets_json" in
+        KEY_NOT_FOUND)
+            echo -e "${RED}DPAPI master key not found. Set up vault in LLM Secrets desktop app first.${NC}" >&2
+            return 1 ;;
+        NO_ENV_FILE)
+            echo -e "${RED}No encrypted env file found.${NC}" >&2
+            return 1 ;;
+        DECRYPT_ERROR*)
+            echo -e "${RED}${secrets_json}${NC}" >&2
+            return 1 ;;
+    esac
+
+    # Validate JSON
+    if ! echo "$secrets_json" | jq empty 2>/dev/null; then
+        echo -e "${RED}Failed to decrypt secrets (invalid output).${NC}" >&2
+        return 1
+    fi
+
+    # Generate random token and store secrets in daemon
+    local store_json
+    store_json=$(python3 -c "
+import json, sys, base64, os
+secrets = json.loads(sys.stdin.read())
+token = base64.b64encode(os.urandom(32)).decode()
+print(json.dumps({'method':'store','params':{'token':token,'secrets':secrets,'ttl':$ttl}}))
+" <<< "$secrets_json")
 
     local response
-    response=$(send_request "{\"method\":\"unlock\",\"params\":{\"ttl\":$ttl,\"totp_code\":\"$totp_code\"}}")
+    response=$(send_request "$store_json" 10)
 
     local success=$(echo "$response" | jq -r '.success // false')
     if [ "$success" = "true" ]; then
-        local count=$(echo "$response" | jq -r '.data.count // 0')
+        local count
+        count=$(echo "$secrets_json" | jq 'length')
         echo -e "${GREEN}Unlocked ${count} secret(s).${NC}"
     else
         local error=$(echo "$response" | jq -r '.error // "Unknown error"')
@@ -139,66 +248,13 @@ cmd_logout() {
     fi
 }
 
-cmd_check_totp() {
-    local response
-    response=$(send_request '{"method":"check_totp"}')
+cmd_check_hello() {
+    resolve_paths || return 1
 
-    local configured=$(echo "$response" | jq -r '.data.configured // false')
-    if [ "$configured" = "true" ]; then
-        echo -e "${GREEN}TOTP is configured.${NC}"
+    if [ -f "${_LLM_DIR}/WindowsHelloAuth.exe" ]; then
+        echo -e "${GREEN}Windows Hello is available.${NC}"
     else
-        echo -e "${YELLOW}TOTP is not configured. Run 'scrt setup-totp' to set up.${NC}"
-    fi
-}
-
-cmd_setup_totp() {
-    local response
-    response=$(send_request '{"method":"setup_totp"}')
-
-    local success=$(echo "$response" | jq -r '.success // false')
-    if [ "$success" != "true" ]; then
-        local error=$(echo "$response" | jq -r '.error // "Unknown error"')
-        echo -e "${RED}Setup failed: ${error}${NC}" >&2
-        return 1
-    fi
-
-    local secret=$(echo "$response" | jq -r '.data.secret')
-    local otpauth_uri=$(echo "$response" | jq -r '.data.otpauth_uri')
-
-    echo -e "${CYAN}TOTP Setup${NC}"
-    echo ""
-    echo -e "Secret (base32): ${GREEN}${secret}${NC}"
-    echo ""
-    echo -e "OTPAuth URI: ${otpauth_uri}"
-    echo ""
-
-    # Show QR code if qrencode is available
-    if command -v qrencode &>/dev/null; then
-        echo "Scan this QR code with Google Authenticator:"
-        echo ""
-        qrencode -t UTF8 "$otpauth_uri"
-        echo ""
-    else
-        echo "Install qrencode for QR code display: sudo apt install qrencode"
-        echo "Or manually enter the secret in your authenticator app."
-        echo ""
-    fi
-
-    # Verify setup
-    echo -n "Enter a TOTP code from your authenticator to verify: "
-    read -r verify_code
-
-    local verify_response
-    verify_response=$(send_request "{\"method\":\"verify_totp_setup\",\"params\":{\"code\":\"$verify_code\"}}")
-
-    local verify_success=$(echo "$verify_response" | jq -r '.success // false')
-    if [ "$verify_success" = "true" ]; then
-        echo -e "${GREEN}TOTP setup verified successfully!${NC}"
-    else
-        local error=$(echo "$verify_response" | jq -r '.error // "Unknown error"')
-        echo -e "${RED}Verification failed: ${error}${NC}" >&2
-        echo -e "${YELLOW}The secret has been saved. You can retry verification with 'scrt check-totp'.${NC}"
-        return 1
+        echo -e "${YELLOW}WindowsHelloAuth.exe not found at: ${_LLM_DIR}${NC}"
     fi
 }
 
@@ -231,6 +287,11 @@ cmd_view() {
         echo -e "${RED}zenity required for GUI view. Install: sudo apt install zenity${NC}" >&2
         return 1
     fi
+
+    # Require Windows Hello auth before revealing secrets
+    echo -e "${CYAN}Authenticating with Windows Hello...${NC}"
+    require_auth "Scrt - Authenticate to view secrets" || return 1
+    echo -e "${GREEN}Windows Hello authenticated.${NC}"
 
     # Phase 1: Request challenge
     local response
@@ -266,6 +327,7 @@ cmd_view() {
         zenity --text-info --title="Scrt - All Secrets" \
             --width=800 --height=600 \
             --font="monospace" \
+            --editable \
             <<< "$secrets" 2>/dev/null
     else
         local error=$(echo "$response" | jq -r '.error // "Unknown error"')
@@ -333,19 +395,412 @@ cmd_migrate() {
 }
 
 cmd_backup_key() {
+    # Require Windows Hello auth before exposing master key
+    echo -e "${CYAN}Authenticating with Windows Hello...${NC}"
+    require_auth "Scrt - Authenticate to access master key" || return 1
+    echo -e "${GREEN}Windows Hello authenticated.${NC}"
+
+    local save_dir=""
+
+    # Parse flags
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --save)
+                save_dir="${2:-$HOME/Desktop}"
+                shift 2 || { save_dir="$HOME/Desktop"; shift; }
+                ;;
+            *)
+                save_dir="$1"
+                shift
+                ;;
+        esac
+    done
+
     local response
     response=$(send_request '{"method":"backup_key"}')
 
     local success=$(echo "$response" | jq -r '.success // false')
-    if [ "$success" = "true" ]; then
-        local key=$(echo "$response" | jq -r '.data.key')
-        echo -e "${CYAN}Master Key (save this securely!):${NC}"
-        echo "$key"
-    else
+    if [ "$success" != "true" ]; then
         local error=$(echo "$response" | jq -r '.error // "Unknown error"')
         echo -e "${RED}${error}${NC}" >&2
         return 1
     fi
+
+    local key=$(echo "$response" | jq -r '.data.key')
+
+    # If --save, write master key to file (Windows Hello is the auth gate)
+    if [ -n "$save_dir" ]; then
+        local output_file="$save_dir/master-key-backup.txt"
+        mkdir -p "$save_dir"
+
+        local timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+        cat > "$output_file" << EOF
+# Scrt Master Key Backup
+# Created: ${timestamp}
+# Auth: Windows Hello
+#
+# WARNING: This file contains your unencrypted master key.
+# Store it in a secure location and delete after use.
+
+${key}
+EOF
+        chmod 600 "$output_file"
+
+        echo -e "${GREEN}Master key saved to: ${output_file}${NC}"
+        echo -e "${YELLOW}WARNING: Store this file securely and delete after use.${NC}"
+    else
+        echo -e "${CYAN}Master Key (save this securely!):${NC}"
+        echo "$key"
+    fi
+}
+
+cmd_recover() {
+    local backup_file="${1:-$BACKUP_FILENAME}"
+
+    if [ ! -f "$backup_file" ]; then
+        echo -e "${RED}Backup file not found: ${backup_file}${NC}" >&2
+        echo "Usage: scrt recover <backup-file.json>" >&2
+        return 1
+    fi
+
+    local created=$(jq -r '.CreatedAt // "unknown"' "$backup_file")
+    local version=$(jq -r '.Version // "1.0"' "$backup_file")
+    echo -e "${CYAN}=== Scrt — Master Key Recovery ===${NC}"
+    echo ""
+    echo "  Backup created: $created"
+    echo "  Format version: $version"
+    echo ""
+
+    # Get recovery password via GUI or terminal
+    local password=""
+    if command -v zenity &>/dev/null; then
+        password=$(zenity --password --title="Scrt - Recovery Password" \
+            --text="Enter your recovery password:" \
+            --width=400 2>/dev/null) || { echo -e "${RED}Cancelled.${NC}"; return 1; }
+    else
+        read -s -p "Enter recovery password: " password
+        echo
+    fi
+
+    echo "Decrypting..."
+
+    local master_key
+    master_key=$(printf '%s' "$password" | python3 -c "
+import json, sys, hashlib, base64, subprocess
+
+password = sys.stdin.read()
+backup_file = sys.argv[1]
+
+with open(backup_file, encoding='utf-8-sig') as f:
+    backup = json.load(f)
+
+salt = base64.b64decode(backup['Salt'])
+iv = base64.b64decode(backup['IV'])
+encrypted = base64.b64decode(backup['EncryptedMasterKey'])
+iters = backup.get('DecryptionInstructions', {}).get('Iterations', 100000)
+
+derived_key = hashlib.pbkdf2_hmac('sha256', password.encode(), salt, iters, dklen=32)
+
+result = subprocess.run(
+    ['openssl', 'enc', '-aes-256-cbc', '-d',
+     '-K', derived_key.hex(), '-iv', iv.hex(), '-nosalt'],
+    input=encrypted, capture_output=True)
+
+if result.returncode != 0:
+    sys.exit(1)
+
+print(result.stdout.decode().rstrip(chr(0)))
+" "$backup_file" 2>/dev/null) || {
+        echo -e "${RED}Decryption failed. Check your recovery password.${NC}" >&2
+        return 1
+    }
+
+    if [ -z "$master_key" ]; then
+        echo -e "${RED}Decryption produced empty result.${NC}" >&2
+        return 1
+    fi
+
+    echo ""
+    echo -e "${GREEN}Recovery successful!${NC}"
+    echo -e "  Key length: ${#master_key} characters"
+    echo ""
+    echo -e "${CYAN}What to do next:${NC}"
+    echo "  scrt migrate \"$master_key\""
+    echo ""
+
+    # Offer to migrate now
+    local do_migrate=""
+    if command -v zenity &>/dev/null; then
+        zenity --question --title="Scrt - Import Recovered Key?" \
+            --text="Import the recovered master key now?\n\nThis will migrate your secrets to a new key." \
+            --width=400 2>/dev/null && do_migrate="yes"
+    else
+        read -p "Import the recovered key now? [y/N] " do_migrate
+    fi
+
+    if [[ "$do_migrate" =~ ^[Yy] ]]; then
+        cmd_migrate "$master_key"
+    fi
+}
+
+cmd_backup() {
+    local local_dest=""
+
+    # Parse --local flag
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --local)
+                local_dest="${2:-}"
+                if [ -z "$local_dest" ]; then
+                    echo -e "${RED}Usage: scrt backup --local <path>${NC}" >&2
+                    return 1
+                fi
+                shift 2
+                ;;
+            *)
+                echo -e "${RED}Unknown option: $1${NC}" >&2
+                echo "Usage: scrt backup [--local <path>]" >&2
+                return 1
+                ;;
+        esac
+    done
+
+    resolve_paths || return 1
+
+    local vault_dir="${_LLM_DIR}/env"
+
+    if [ ! -d "$vault_dir" ]; then
+        echo -e "${RED}Vault not found at: ${vault_dir}${NC}" >&2
+        return 1
+    fi
+
+    # Count vault files
+    local main_count=0 backup_count=0
+    for f in "$vault_dir"/.env.encrypted.*; do
+        [ -f "$f" ] && main_count=$((main_count + 1))
+    done
+    if [ -d "$vault_dir/backup" ]; then
+        for f in "$vault_dir/backup"/.env.encrypted.*; do
+            [ -f "$f" ] && backup_count=$((backup_count + 1))
+        done
+    fi
+
+    if [ "$main_count" -eq 0 ]; then
+        echo -e "${RED}No encrypted vault files found in: ${vault_dir}${NC}" >&2
+        return 1
+    fi
+
+    local timestamp=$(date +%Y-%m-%d)
+    local zip_name="scrt-backup-${timestamp}.zip"
+    local tmp_dir=$(mktemp -d)
+    local staging="${tmp_dir}/${zip_name%.zip}"
+    local zip_path="${tmp_dir}/${zip_name}"
+
+    echo -e "${CYAN}Backing up vault (${main_count} main + ${backup_count} backup files)...${NC}"
+
+    # Stage files
+    mkdir -p "${staging}/backup"
+    for f in "$vault_dir"/.env.encrypted.*; do
+        [ -f "$f" ] && cp "$f" "${staging}/"
+    done
+    if [ -d "$vault_dir/backup" ]; then
+        for f in "$vault_dir/backup"/.env.encrypted.*; do
+            [ -f "$f" ] && cp "$f" "${staging}/backup/"
+        done
+    fi
+
+    # Create zip
+    (cd "$tmp_dir" && zip -rq "$zip_path" "${zip_name%.zip}/")
+    local zip_size=$(stat -c%s "$zip_path" 2>/dev/null || stat -f%z "$zip_path" 2>/dev/null)
+    echo -e "${GREEN}Created ${zip_name} (${zip_size} bytes)${NC}"
+
+    # Local backup mode
+    if [ -n "$local_dest" ]; then
+        if [ ! -d "$local_dest" ]; then
+            echo -e "${RED}Directory not found: ${local_dest}${NC}" >&2
+            rm -rf "$tmp_dir"
+            return 1
+        fi
+        cp "$zip_path" "${local_dest}/${zip_name}"
+        echo -e "${GREEN}Saved to: ${local_dest}/${zip_name}${NC}"
+        rm -rf "$tmp_dir"
+        return 0
+    fi
+
+    # Google Drive upload via scrt run + Python
+    echo -e "${CYAN}Uploading to Google Drive...${NC}"
+
+    local upload_script="${tmp_dir}/upload.py"
+    cat > "$upload_script" << 'PYEOF'
+#!/usr/bin/env python3
+"""Upload a file to Google Drive. Reads credentials from stdin."""
+import sys, os, json, re, urllib.request, urllib.parse
+
+file_path = sys.argv[1]
+file_name = os.path.basename(file_path)
+
+creds_raw = sys.stdin.read().strip()
+
+client_id = re.search(r"client_id:([^,}]+)", creds_raw)
+client_secret = re.search(r"client_secret:([^,}]+)", creds_raw)
+refresh_token = re.search(r"refresh_token:([^,}]+)", creds_raw)
+token_uri = re.search(r"token_uri:([^,}]+)", creds_raw)
+
+if not all([client_id, client_secret, refresh_token, token_uri]):
+    print("ERROR: Could not parse credentials", file=sys.stderr)
+    sys.exit(1)
+
+client_id = client_id.group(1).strip()
+client_secret = client_secret.group(1).strip()
+refresh_token = refresh_token.group(1).strip()
+token_uri = token_uri.group(1).strip()
+
+data = urllib.parse.urlencode({
+    "client_id": client_id, "client_secret": client_secret,
+    "refresh_token": refresh_token, "grant_type": "refresh_token"
+}).encode()
+req = urllib.request.Request(token_uri, data=data, method="POST")
+resp = json.loads(urllib.request.urlopen(req).read())
+access_token = resp["access_token"]
+
+file_size = os.path.getsize(file_path)
+boundary = "----ScrtBackupBoundary"
+metadata = json.dumps({"name": file_name}).encode()
+
+with open(file_path, "rb") as f:
+    file_data = f.read()
+
+body = (
+    f"--{boundary}\r\n"
+    f"Content-Type: application/json; charset=UTF-8\r\n\r\n"
+).encode() + metadata + (
+    f"\r\n--{boundary}\r\n"
+    f"Content-Type: application/zip\r\n\r\n"
+).encode() + file_data + f"\r\n--{boundary}--".encode()
+
+req = urllib.request.Request(
+    "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart",
+    data=body,
+    headers={
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": f"multipart/related; boundary={boundary}",
+    },
+    method="POST"
+)
+
+resp = json.loads(urllib.request.urlopen(req).read())
+print(json.dumps({"id": resp["id"], "name": resp["name"]}))
+PYEOF
+
+    local result
+    result=$("$CLIENT" run 'echo "$env[personal_google_workspace]" | python3 '"${upload_script} ${zip_path}")
+
+    if [ $? -ne 0 ] || [ -z "$result" ]; then
+        echo -e "${RED}Upload failed. Is personal_google_workspace secret available?${NC}" >&2
+        echo -e "${YELLOW}Backup zip preserved at: ${zip_path}${NC}"
+        return 1
+    fi
+
+    local file_id=$(echo "$result" | jq -r '.id')
+    local file_name_out=$(echo "$result" | jq -r '.name')
+
+    echo -e "${GREEN}Uploaded successfully!${NC}"
+    echo -e "  Name: ${file_name_out}"
+    echo -e "  Link: ${CYAN}https://drive.google.com/file/d/${file_id}/view${NC}"
+
+    # Cleanup
+    rm -rf "$tmp_dir"
+}
+
+cmd_menu() {
+    if ! command -v zenity &>/dev/null; then
+        echo -e "${RED}zenity required for GUI menu. Install: sudo apt install zenity${NC}" >&2
+        return 1
+    fi
+
+    # Check session status for display
+    local status_response
+    status_response=$(send_request '{"method":"status"}' 2>/dev/null)
+    local active=$(echo "$status_response" | jq -r '.data.active // false' 2>/dev/null)
+    local remaining=$(echo "$status_response" | jq -r '.data.remaining // 0' 2>/dev/null)
+
+    local status_text="Session: LOCKED"
+    if [ "$active" = "true" ]; then
+        if [ "$remaining" -lt 0 ] 2>/dev/null; then
+            status_text="Session: ACTIVE (no expiry)"
+        else
+            local mins=$((remaining / 60))
+            status_text="Session: ACTIVE (${mins}m remaining)"
+        fi
+    fi
+
+    local choice
+    choice=$(zenity --list \
+        --title="Scrt v${VERSION}" \
+        --text="$status_text\n\nSelect a command:" \
+        --column="Command" --column="Description" \
+        --width=500 --height=450 \
+        "unlock"       "Authenticate with Windows Hello" \
+        "status"       "Check session status" \
+        "list"         "List secret names" \
+        "view"         "View all secrets in GUI" \
+        "add"          "Add a secret (KEY=value)" \
+        "extend"       "Reset session timer" \
+        "backup"       "Backup vault to Google Drive / local" \
+        "backup-key"   "Save encrypted master key backup" \
+        "recover"      "Recover master key from backup" \
+        "check-hello"  "Check Windows Hello availability" \
+        "migrate"      "Migrate from old master key" \
+        "logout"       "Clear session / lock" \
+        2>/dev/null) || return 0  # User cancelled
+
+    case "$choice" in
+        unlock)       cmd_unlock ;;
+        status)       cmd_status ;;
+        list)
+            local names
+            names=$(cmd_list 2>&1)
+            if [ -n "$names" ]; then
+                zenity --text-info --title="Scrt - Secret Names" \
+                    --width=400 --height=300 \
+                    --font="monospace" \
+                    <<< "$names" 2>/dev/null
+            fi
+            ;;
+        view)         cmd_view ;;
+        add)
+            local input
+            input=$(zenity --entry --title="Scrt - Add Secret" \
+                --text="Enter KEY=value:" \
+                --width=400 2>/dev/null) || return 0
+            if [ -n "$input" ]; then
+                cmd_add "$input"
+            fi
+            ;;
+        extend)       cmd_extend ;;
+        backup)       cmd_backup ;;
+        backup-key)   cmd_backup_key --save ;;
+        recover)
+            local file
+            file=$(zenity --file-selection --title="Select Backup File" \
+                --file-filter="JSON files|*.json" \
+                2>/dev/null) || return 0
+            if [ -n "$file" ]; then
+                cmd_recover "$file"
+            fi
+            ;;
+        check-hello)  cmd_check_hello ;;
+        migrate)
+            local key
+            key=$(zenity --entry --title="Scrt - Migrate" \
+                --text="Enter old master key (44 characters, base64):" \
+                --width=500 2>/dev/null) || return 0
+            if [ -n "$key" ]; then
+                cmd_migrate "$key"
+            fi
+            ;;
+        logout)       cmd_logout ;;
+    esac
 }
 
 cmd_help() {
@@ -355,28 +810,35 @@ cmd_help() {
     echo "  scrt <command> [options]"
     echo ""
     echo "COMMANDS:"
-    echo "  unlock [ttl]      Authenticate with TOTP (default: 7200s)"
+    echo "  menu              Interactive GUI menu (zenity)"
+    echo "  unlock [ttl]      Authenticate with Windows Hello (default: 7200s)"
     echo "  status            Check session status"
     echo "  list              List secret names"
     echo "  run <command>     Run command with \$env[NAME] substitution"
     echo "  add KEY=val ...   Add secrets to active session"
-    echo "  view              View all secrets in GUI (zenity)"
+    echo "  view              View all secrets in GUI (zenity + Windows Hello)"
     echo "  extend [ttl]      Reset session timer"
     echo "  logout            Clear session (aliases: lock, clear)"
-    echo "  setup-totp        Configure TOTP (Google Authenticator)"
-    echo "  check-totp        Check TOTP configuration status"
+    echo "  check-hello       Check Windows Hello availability"
+    echo "  backup [--local]  Backup encrypted vault to Google Drive (or local)"
+    echo "  backup-key        Show current master key (Windows Hello required)"
+    echo "  backup-key --save [dir]  Save encrypted backup to directory"
+    echo "  recover [file]    Recover master key from encrypted backup"
     echo "  migrate <key>     Migrate secrets from old master key"
-    echo "  backup-key        Show current master key"
     echo "  help              Show this help"
     echo ""
     echo "EXAMPLES:"
-    echo "  scrt setup-totp                # Initial TOTP setup"
-    echo "  scrt unlock                    # Authenticate (2 hour session)"
-    echo "  scrt unlock 28800              # 8 hour session"
-    echo "  scrt list                      # List secret names"
-    echo "  scrt run 'curl -H \"Auth: Bearer \$env[API_KEY]\" https://api.example.com'"
-    echo "  scrt add API_KEY=sk-123        # Add a secret"
-    echo "  scrt view                      # View secrets in GUI"
+    echo "  scrt                             # Show help + GUI menu"
+    echo "  scrt unlock                      # Authenticate (2 hour session)"
+    echo "  scrt unlock 28800                # 8 hour session"
+    echo "  scrt list                        # List secret names"
+    echo "  scrt run 'curl -H \"Authorization: Bearer \$env[API_KEY]\" https://api.example.com'"
+    echo "  scrt add API_KEY=sk-123          # Add a secret"
+    echo "  scrt view                        # View secrets in GUI"
+    echo "  scrt backup                      # Backup vault to Google Drive"
+    echo "  scrt backup --local ~/backups    # Backup vault locally"
+    echo "  scrt backup-key --save ~/safe    # Create encrypted master key backup"
+    echo "  scrt recover backup.json         # Recover from backup"
 }
 
 # Check daemon is running
@@ -386,19 +848,21 @@ if [ ! -S "$SOCKET" ]; then
 fi
 
 # Route command
-case "${1:-help}" in
+case "${1:-menu}" in
+    menu)         cmd_help; cmd_menu ;;
     unlock)       shift; cmd_unlock "$@" ;;
     status)       cmd_status ;;
     list)         cmd_list ;;
     run)          shift; cmd_run "$@" ;;
     logout|lock|clear) cmd_logout ;;
-    check-totp|check) cmd_check_totp ;;
-    setup-totp)   cmd_setup_totp ;;
+    check-hello|check) cmd_check_hello ;;
     extend)       shift; cmd_extend "$@" ;;
     view)         cmd_view ;;
     add)          shift; cmd_add "$@" ;;
     migrate)      shift; cmd_migrate "$@" ;;
-    backup-key)   cmd_backup_key ;;
+    backup)       shift; cmd_backup "$@" ;;
+    backup-key)   shift; cmd_backup_key "$@" ;;
+    recover)      shift; cmd_recover "$@" ;;
     help|--help|-h) cmd_help ;;
     -v|--version) echo "scrt v${VERSION}" ;;
     *)
