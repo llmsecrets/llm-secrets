@@ -1,0 +1,681 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LLM Secrets — Authenticate</title>
+  <meta name="theme-color" content="#0a0a0a">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" type="image/svg+xml" href="/icon.svg">
+  <link rel="apple-touch-icon" href="/icon.svg">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="LLM Secrets">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      display: flex; justify-content: center; align-items: center;
+      min-height: 100vh; background: #0a0a0a; color: #e5e5e5;
+      padding: 20px;
+    }
+    .container {
+      background: #1a1a1a; padding: 32px; border-radius: 16px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.4); text-align: center;
+      max-width: 380px; width: 100%; border: 1px solid #333;
+    }
+    .logo { font-size: 28px; font-weight: 700; margin-bottom: 4px; color: #fff; }
+    .subtitle { color: #888; font-size: 14px; margin-bottom: 24px; }
+    #status { color: #888; margin: 16px 0; font-size: 14px; min-height: 20px; }
+    .success { color: #22c55e !important; }
+    .error { color: #ef4444 !important; }
+    .spinner {
+      display: none; width: 28px; height: 28px;
+      border: 3px solid #333; border-top: 3px solid #3b82f6;
+      border-radius: 50%; animation: spin 0.8s linear infinite; margin: 20px auto;
+    }
+    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    #startBtn {
+      background: #3b82f6; color: white; border: none;
+      padding: 16px 32px; border-radius: 12px; font-size: 17px;
+      font-weight: 600; cursor: pointer; width: 100%;
+      transition: background 0.2s;
+    }
+    #startBtn:hover { background: #2563eb; }
+    #startBtn:active { background: #1d4ed8; transform: scale(0.98); }
+    #startBtn:disabled { background: #374151; cursor: not-allowed; color: #9ca3af; }
+    #altBtn {
+      display: none; margin-top: 12px; background: transparent;
+      color: #888; border: 1px solid #333; padding: 10px 16px;
+      border-radius: 10px; font-size: 13px; cursor: pointer; width: 100%;
+    }
+    #altBtn:hover { color: #ccc; border-color: #555; }
+    .lock-icon { font-size: 48px; margin-bottom: 16px; }
+    .footer { margin-top: 24px; font-size: 12px; color: #555; }
+    .footer a { color: #666; text-decoration: none; }
+    #debugLog {
+      margin-top: 16px; text-align: left; font-size: 11px; color: #555;
+      font-family: monospace; max-height: 150px; overflow-y: auto;
+      border-top: 1px solid #222; padding-top: 8px;
+      word-break: break-all;
+    }
+    #debugLog div { margin-bottom: 2px; }
+    .compat { margin-top: 20px; text-align: left; border-top: 1px solid #333; padding-top: 16px; }
+    .compat-title {
+      font-size: 13px; color: #888; cursor: pointer; user-select: none;
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    .compat-title:hover { color: #aaa; }
+    .compat-arrow { transition: transform 0.2s; font-size: 10px; }
+    .compat-arrow.open { transform: rotate(90deg); }
+    .compat-body { display: none; margin-top: 12px; }
+    .compat-body.open { display: block; }
+    .compat-item {
+      background: #111; border: 1px solid #2a2a2a; border-radius: 8px;
+      margin-bottom: 8px; overflow: hidden;
+    }
+    .compat-header {
+      padding: 10px 12px; cursor: pointer; display: flex;
+      justify-content: space-between; align-items: center;
+      font-size: 14px; user-select: none;
+    }
+    .compat-header:hover { background: #1f1f1f; }
+    .compat-badge {
+      font-size: 11px; padding: 2px 8px; border-radius: 10px;
+      font-weight: 600;
+    }
+    .badge-rec { background: #166534; color: #4ade80; }
+    .badge-ok { background: #1e3a5f; color: #60a5fa; }
+    .badge-free { background: #422006; color: #fb923c; }
+    .compat-detail {
+      display: none; padding: 8px 12px 12px; font-size: 13px;
+      color: #999; line-height: 1.5; border-top: 1px solid #2a2a2a;
+    }
+    .compat-detail.open { display: block; }
+    .compat-detail strong { color: #ccc; }
+    .action-card {
+      display: none; margin: 16px 0 20px; padding: 12px 14px;
+      background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 10px;
+      text-align: left;
+    }
+    .action-card.visible { display: block; }
+    .action-card .action-kicker {
+      font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em;
+      color: #888; margin-bottom: 4px;
+    }
+    .action-card .action-label {
+      font-size: 15px; color: #f5f5f5; font-weight: 600;
+      word-break: break-word;
+    }
+    .action-card .action-disclaimer {
+      margin-top: 8px; font-size: 12px; color: #888; line-height: 1.5;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="lock-icon" id="lockIcon">&#x1f512;</div>
+    <div class="logo">LLM Secrets</div>
+    <div class="subtitle" id="modeLabel">Authenticate</div>
+    <div class="action-card" id="actionCard">
+      <div class="action-kicker">Requested action</div>
+      <div class="action-label" id="actionLabelText"></div>
+      <div class="action-disclaimer">
+        Reported by your computer &mdash; not part of the signed passkey challenge.
+        Verify it matches the command you just ran.
+      </div>
+    </div>
+    <button id="startBtn" disabled>Unlock with Passkey</button>
+    <button id="altBtn" type="button">Use a different device (phone or security key)</button>
+    <div class="spinner" id="spinner"></div>
+    <p id="status">Initializing...</p>
+    <div id="debugLog"></div>
+    <div class="compat">
+      <div class="compat-title" onclick="toggleCompat()">
+        Compatible passkey providers <span class="compat-arrow" id="compatArrow">&#9654;</span>
+      </div>
+      <div class="compat-body" id="compatBody">
+
+        <div class="compat-item">
+          <div class="compat-header" onclick="toggleDetail(this)">
+            <span>iCloud Keychain</span>
+            <span class="compat-badge badge-rec">Recommended for iOS</span>
+          </div>
+          <div class="compat-detail">
+            <strong>Built-in on iPhone, iPad, and Mac.</strong> No app to install.<br>
+            Requires <strong>iOS 18+</strong> / <strong>Safari 18+</strong>.<br>
+            Settings &rarr; Passwords &rarr; Password Options &rarr; ensure iCloud Passwords is on.
+          </div>
+        </div>
+
+        <div class="compat-item">
+          <div class="compat-header" onclick="toggleDetail(this)">
+            <span>Google Password Manager</span>
+            <span class="compat-badge badge-rec">Recommended for Android</span>
+          </div>
+          <div class="compat-detail">
+            <strong>Built-in on Android.</strong> No app to install.<br>
+            Requires <strong>Android 14+</strong> with Chrome or the default browser.<br>
+            Settings &rarr; Passwords &amp; Accounts &rarr; ensure Google is the default passkey provider.
+          </div>
+        </div>
+
+        <div class="compat-item">
+          <div class="compat-header" onclick="toggleDetail(this)">
+            <span>Bitwarden</span>
+            <span class="compat-badge badge-free">Free &middot; iOS &amp; Android</span>
+          </div>
+          <div class="compat-detail">
+            <strong>Free, open-source password manager</strong> with FIDO2/passkey support.<br>
+            Works on both iOS and Android. Great fallback if iCloud Keychain or Google Password Manager doesn't work.<br>
+            <strong>iOS:</strong> Settings &rarr; Passwords &rarr; Password Options &rarr; enable Bitwarden.<br>
+            <strong>Android:</strong> Settings &rarr; Passwords &amp; Accounts &rarr; set Bitwarden as default.
+          </div>
+        </div>
+
+        <div class="compat-item">
+          <div class="compat-header" onclick="toggleDetail(this)">
+            <span>1Password</span>
+            <span class="compat-badge badge-ok">Paid &middot; iOS &amp; Android</span>
+          </div>
+          <div class="compat-detail">
+            <strong>Premium password manager</strong> with full PRF support.<br>
+            Works on both iOS and Android. Setup is the same as Bitwarden &mdash; set it as your passkey provider in system settings.
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <div class="footer">End-to-end encrypted &middot; <a href="https://llmsecrets.com">LLM Secrets</a></div>
+  </div>
+
+  <script>
+    function toggleCompat() {
+      document.getElementById('compatBody').classList.toggle('open');
+      document.getElementById('compatArrow').classList.toggle('open');
+    }
+    function toggleDetail(header) {
+      header.nextElementSibling.classList.toggle('open');
+    }
+  </script>
+
+  <script>
+    // Debug log — visible on page so user can report exactly what happened
+    const logEl = document.getElementById('debugLog');
+    function log(msg) {
+      const d = document.createElement('div');
+      d.textContent = new Date().toLocaleTimeString() + ' ' + msg;
+      logEl.appendChild(d);
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    // detectPlatform — pick a sensible authenticator default.
+    //   mac/ios/android: the PLATFORM authenticator IS the keychain the user
+    //     expects (Touch ID → iCloud Keychain, Android → Google Password Manager).
+    //     Setting authenticatorAttachment: "platform" skips the picker entirely.
+    //   windows/linux: "platform" here would pin Windows Hello and hide Google
+    //     Password Manager from Chrome's UI — exactly what we don't want. Leave
+    //     attachment unset and use WebAuthn L3 `hints: ["client-device"]` so
+    //     Chrome's modern picker foregrounds local/synced providers over a
+    //     phone QR step. Users who genuinely want a phone can click "Use a
+    //     different device" which re-runs the flow with no attachment or hints.
+    function detectPlatform() {
+      const ua = navigator.userAgent || '';
+      const hint = (navigator.userAgentData && navigator.userAgentData.platform) || '';
+      const p = hint.toLowerCase();
+      // iOS first — iPhone UA contains "like Mac OS X", so a naive Mac check
+      // would steal iPhones. iPadOS 13+ in "desktop mode" reports a Macintosh
+      // UA with no iPad token; the tell is a touch-capable Mac (phones/desktops
+      // report maxTouchPoints ≤ 1).
+      if (/iPhone|iPad|iPod/.test(ua))              return 'ios';
+      if (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1) return 'ios';
+      if (p === 'android' || /Android/.test(ua))    return 'android';
+      if (p === 'macos' || /Mac OS X/.test(ua))     return 'mac';
+      if (p === 'windows' || /Windows/.test(ua))    return 'windows';
+      if (p === 'linux'   || /Linux/.test(ua))      return 'linux';
+      return 'other';
+    }
+    // Set once, consulted by the register and (optionally) auth flows below.
+    let useCrossPlatform = false;   // flipped by "Use a different device" button
+
+    // Catch ALL unhandled errors
+    window.onerror = function(msg, src, line, col, err) {
+      log('UNCAUGHT: ' + msg + ' at line ' + line);
+      showError('Unexpected error: ' + msg);
+    };
+    window.onunhandledrejection = function(e) {
+      log('UNHANDLED REJECTION: ' + (e.reason?.message || e.reason));
+      showError('Async error: ' + (e.reason?.message || e.reason));
+    };
+
+    function showError(msg) {
+      document.getElementById('spinner').style.display = 'none';
+      status.className = 'error';
+      status.textContent = msg;
+      btn.style.display = 'block';
+      btn.disabled = false;
+    }
+
+    // Parse URL parameters. The daemon puts the wrapping key `k` in the
+    // URL *fragment* (#k=...) on purpose — fragments are never sent to
+    // the server, so the relay operator can't capture the key from access
+    // logs. Everything else rides in the query string.
+    const params = new URLSearchParams(window.location.search);
+    const hashParams = new URLSearchParams((window.location.hash || '').replace(/^#/, ''));
+    const pick = (name) => params.get(name) ?? hashParams.get(name);
+    let mode = pick('m') || 'auth';
+    let sessionId = pick('s');
+    let challengeB64 = pick('c');
+    let saltB64 = pick('salt');
+    let credIdB64 = pick('cred');
+    let wrappingKeyHex = pick('k');
+    let rpId = pick('rp') || 'auth.llmsecrets.com';
+    let callbackUrl = pick('cb');
+    let actionLabel = pick('a');
+
+    const status = document.getElementById('status');
+    const btn = document.getElementById('startBtn');
+
+    log('Page loaded. sessionId=' + (sessionId ? sessionId.substring(0,8) + '...' : 'null'));
+    log('Has challenge=' + !!challengeB64 + ' salt=' + !!saltB64 + ' key=' + !!wrappingKeyHex);
+
+    // Short URL mode: fetch full params from relay
+    async function loadParamsFromRelay() {
+      if (sessionId && !challengeB64) {
+        log('Short URL mode — fetching params from relay...');
+        status.textContent = 'Loading parameters...';
+        btn.disabled = true;
+        try {
+          const relayUrl = `${window.location.origin}/api/relay/${sessionId}-p`;
+          log('Fetching: ' + relayUrl);
+          const resp = await fetch(relayUrl);
+          log('Relay response: ' + resp.status);
+          if (!resp.ok) throw new Error('Relay returned ' + resp.status);
+          const data = await resp.json();
+          log('Got payload: ' + (data.payload ? data.payload.substring(0, 60) + '...' : 'EMPTY'));
+          if (!data.payload) throw new Error('Empty relay payload');
+
+          const fullUrl = new URL(data.payload);
+          const fp = fullUrl.searchParams;
+          // Same query-vs-fragment split as the direct-URL path: `k`
+          // lives in the fragment so the relay can't log it.
+          const fhp = new URLSearchParams((fullUrl.hash || '').replace(/^#/, ''));
+          const fpick = (name) => fp.get(name) ?? fhp.get(name);
+          mode = fpick('m') || 'auth';
+          challengeB64 = fpick('c');
+          saltB64 = fpick('salt');
+          credIdB64 = fpick('cred');
+          wrappingKeyHex = fpick('k');
+          rpId = fpick('rp') || 'auth.llmsecrets.com';
+          callbackUrl = fpick('cb');
+          actionLabel = fpick('a');
+          log('Params loaded. mode=' + mode + ' challenge=' + !!challengeB64 + ' salt=' + !!saltB64);
+          status.textContent = '';
+          btn.disabled = false;
+          initUI();
+        } catch (e) {
+          log('ERROR loading params: ' + e.message);
+          status.className = 'error';
+          status.textContent = 'Failed to load: ' + e.message;
+        }
+        return;
+      }
+      log('Full URL mode — params already in URL');
+      initUI();
+    }
+
+    function initUI() {
+      if (!sessionId || !challengeB64 || !saltB64 || !wrappingKeyHex) {
+        log('Missing params: s=' + !!sessionId + ' c=' + !!challengeB64 + ' salt=' + !!saltB64 + ' k=' + !!wrappingKeyHex);
+        status.className = 'error';
+        status.textContent = 'Invalid link. Scan the QR code again.';
+        btn.disabled = true;
+        return;
+      }
+      if (actionLabel) {
+        // textContent (not innerHTML) — daemon-supplied string is not trusted markup.
+        document.getElementById('actionLabelText').textContent = actionLabel;
+        document.getElementById('actionCard').classList.add('visible');
+      }
+      if (mode === 'register') {
+        document.getElementById('modeLabel').textContent = 'Register New Credential';
+        btn.textContent = 'Register Passkey';
+        // Expose the cross-platform escape hatch only during registration —
+        // auth uses allowCredentials and can't switch authenticators anyway.
+        document.getElementById('altBtn').style.display = 'block';
+        // If the user landed here on a desktop during registration, show a
+        // phone-first hero before the normal button. The CLI printed a QR
+        // expecting them to scan it with their phone; registering here would
+        // bind the passkey to this computer instead, which is almost never
+        // what they want.
+        maybeShowPhoneFirstHero();
+      }
+      btn.disabled = false;
+      status.textContent = '';
+      log('Ready. mode=' + mode);
+    }
+
+    // Hide the register UI on desktop and show a prominent "scan the QR with
+    // your phone" hero. Provide a small "Continue on this computer anyway"
+    // escape hatch for users who genuinely want a desktop-bound passkey.
+    function maybeShowPhoneFirstHero() {
+      const platform = detectPlatform();
+      if (platform === 'ios' || platform === 'android') return;  // already on phone
+
+      const hero = document.createElement('div');
+      hero.id = 'phoneHero';
+      hero.style.cssText = 'margin-top:8px; padding:20px; background:#0f1724; border:1px solid #1e3a5f; border-radius:12px; text-align:center;';
+      hero.innerHTML =
+        '<div style="font-size:44px; line-height:1;">&#128241;</div>' +
+        '<div style="font-size:17px; font-weight:600; color:#e5e5e5; margin-top:10px;">Open this on your phone</div>' +
+        '<p style="color:#9ca3af; margin-top:10px; font-size:13px; line-height:1.5;">' +
+        'Your terminal is showing a <strong>QR code</strong> right now &mdash; scan it with your phone camera. ' +
+        'Registering here on this computer would tie the passkey to this device only.' +
+        '</p>' +
+        '<button id="copyLinkBtn" style="margin-top:12px; background:#2563eb; color:white; border:none; padding:12px 16px; border-radius:10px; font-size:14px; font-weight:600; cursor:pointer; width:100%;">Copy link to send to phone</button>' +
+        '<div style="margin-top:14px;"><a id="continueDesktopBtn" href="#" style="color:#6b7280; font-size:12px; text-decoration:underline;">Continue on this computer anyway</a></div>';
+
+      btn.style.display = 'none';
+      document.getElementById('altBtn').style.display = 'none';
+      btn.parentNode.insertBefore(hero, btn);
+
+      document.getElementById('copyLinkBtn').addEventListener('click', async () => {
+        const link = document.getElementById('copyLinkBtn');
+        try {
+          await navigator.clipboard.writeText(window.location.href);
+          link.textContent = '\u2713 Link copied — open it on your phone';
+          link.style.background = '#166534';
+        } catch (e) {
+          // Clipboard API can fail in non-HTTPS or restricted contexts;
+          // fall back to a prompt so the user can still grab the URL.
+          window.prompt('Copy this URL and open it on your phone:', window.location.href);
+        }
+      });
+
+      document.getElementById('continueDesktopBtn').addEventListener('click', (e) => {
+        e.preventDefault();
+        log('User chose to continue register on desktop');
+        hero.remove();
+        btn.style.display = 'block';
+        document.getElementById('altBtn').style.display = 'block';
+      });
+    }
+
+    loadParamsFromRelay();
+
+    // Helpers
+    function b64ToBytes(b64) {
+      // URLSearchParams decodes + as space — restore them
+      let fixed = b64.replace(/ /g, '+');
+      // Handle URL-safe base64 (- → +, _ → /)
+      fixed = fixed.replace(/-/g, '+').replace(/_/g, '/');
+      // Add padding if missing
+      while (fixed.length % 4) fixed += '=';
+      return Uint8Array.from(atob(fixed), c => c.charCodeAt(0));
+    }
+    function bytesToB64(bytes) {
+      return btoa(String.fromCharCode(...bytes));
+    }
+    function hexToBytes(hex) {
+      const bytes = new Uint8Array(hex.length / 2);
+      for (let i = 0; i < hex.length; i += 2) {
+        bytes[i / 2] = parseInt(hex.substr(i, 2), 16);
+      }
+      return bytes;
+    }
+
+    async function encryptPayload(data, keyHex) {
+      const keyBytes = hexToBytes(keyHex);
+      const key = await crypto.subtle.importKey('raw', keyBytes, 'AES-GCM', false, ['encrypt']);
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      const plaintext = new TextEncoder().encode(JSON.stringify(data));
+      const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, plaintext);
+      const combined = new Uint8Array(iv.length + ciphertext.byteLength);
+      combined.set(iv);
+      combined.set(new Uint8Array(ciphertext), iv.length);
+      return bytesToB64(combined);
+    }
+
+    async function sendToRelay(encryptedPayload) {
+      const relayBase = callbackUrl || window.location.origin;
+      const url = `${relayBase}/api/relay/${sessionId}`;
+      log('POSTing result to relay...');
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ payload: encryptedPayload })
+      });
+      log('Relay POST response: ' + resp.status);
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        throw new Error(err.error || `Relay error: ${resp.status}`);
+      }
+    }
+
+    // "Use a different device" — opt into cross-platform (phone/security key)
+    // and re-run the main flow. Only meaningful during registration.
+    document.getElementById('altBtn').addEventListener('click', () => {
+      useCrossPlatform = true;
+      log('Cross-platform mode requested by user');
+      document.getElementById('altBtn').style.display = 'none';
+      btn.click();
+    });
+
+    // Main action
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      btn.style.display = 'none';
+      document.getElementById('altBtn').style.display = 'none';
+      document.getElementById('spinner').style.display = 'block';
+      log('Button clicked');
+
+      // Help timer — if WebAuthn hangs, show guidance after 8 seconds
+      let helpTimer = setTimeout(() => {
+        log('WebAuthn prompt may not have appeared');
+        const helpDiv = document.createElement('div');
+        helpDiv.style.cssText = 'margin-top:12px;padding:12px;background:#1c1c0e;border:1px solid #555522;border-radius:8px;font-size:13px;color:#cccc88;text-align:left;';
+        helpDiv.innerHTML = '<strong>Not seeing a passkey prompt?</strong><br>Your browser may not support passkeys. Try opening this page in <strong>Safari</strong> (iOS) or <strong>Chrome</strong> (Android) instead.';
+        status.parentNode.insertBefore(helpDiv, status.nextSibling);
+      }, 8000);
+
+      try {
+        if (!window.isSecureContext) throw new Error('Requires HTTPS');
+        if (!navigator.credentials) throw new Error('WebAuthn not available in this browser');
+        if (!window.PublicKeyCredential) throw new Error('PublicKeyCredential not supported — open in Safari or Chrome');
+
+        log('Decoding challenge and salt...');
+        const challenge = b64ToBytes(challengeB64);
+        const salt = b64ToBytes(saltB64);
+        log('Challenge: ' + challenge.length + ' bytes, Salt: ' + salt.length + ' bytes');
+
+        // Check WebAuthn platform support
+        try {
+          const available = await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
+          log('Platform authenticator available: ' + available);
+          if (!available) {
+            log('WARNING: No platform authenticator — will try anyway');
+          }
+        } catch (e) {
+          log('Platform check failed: ' + e.message);
+        }
+
+        if (mode === 'register') {
+          status.textContent = '[1/5] Starting passkey registration...';
+          const platform = detectPlatform();
+          log('Platform detected: ' + platform + (useCrossPlatform ? ' (cross-platform override)' : ''));
+
+          // Build the authenticator selection + hints tailored to the device
+          // the user is registering on. See detectPlatform() for the rationale.
+          const authSel = { residentKey: 'required', userVerification: 'required' };
+          const pkOpts = {
+            challenge,
+            rp: { id: rpId, name: 'LLM Secrets' },
+            user: {
+              id: crypto.getRandomValues(new Uint8Array(16)),
+              name: 'llmsecrets-user',
+              displayName: 'LLM Secrets User'
+            },
+            pubKeyCredParams: [
+              { type: 'public-key', alg: -7 },
+              { type: 'public-key', alg: -257 }
+            ],
+            authenticatorSelection: authSel,
+            extensions: { prf: { eval: { first: salt } } }
+          };
+
+          if (useCrossPlatform) {
+            // User explicitly wants a phone or security key — no platform pinning.
+            authSel.authenticatorAttachment = 'cross-platform';
+            pkOpts.hints = ['hybrid', 'security-key'];
+          } else if (platform === 'mac' || platform === 'ios' || platform === 'android') {
+            // Apple + Android: platform authenticator IS the synced keychain.
+            authSel.authenticatorAttachment = 'platform';
+            pkOpts.hints = ['client-device'];
+          } else {
+            // Windows, Linux, unknown: don't pin attachment — that would hide
+            // Google Password Manager from Chrome's UI. Just nudge the browser
+            // to prioritize local/synced providers over a phone handoff.
+            pkOpts.hints = ['client-device'];
+          }
+
+          log('Creating credential with PRF extension...');
+          const credential = await navigator.credentials.create({ publicKey: pkOpts });
+
+          clearTimeout(helpTimer);
+          log('Credential created! rawId length: ' + credential.rawId.byteLength);
+          status.textContent = '[2/5] Passkey created! Checking PRF...';
+
+          const extResults = credential.getClientExtensionResults();
+          log('Extensions: ' + JSON.stringify(extResults));
+          let prfOutput;
+
+          if (extResults.prf && extResults.prf.results && extResults.prf.results.first) {
+            prfOutput = new Uint8Array(extResults.prf.results.first);
+            log('PRF output from create: ' + prfOutput.length + ' bytes');
+          } else if (extResults.prf && extResults.prf.enabled) {
+            status.textContent = '[2/5] PRF needs a second tap...';
+            log('PRF enabled but no output in create — doing get()...');
+            const credId = new Uint8Array(credential.rawId);
+            const assertion = await navigator.credentials.get({
+              publicKey: {
+                challenge: crypto.getRandomValues(new Uint8Array(32)),
+                rpId,
+                allowCredentials: [{ type: 'public-key', id: credId }],
+                userVerification: 'required',
+                extensions: { prf: { eval: { first: salt } } }
+              }
+            });
+            const prfResult2 = assertion.getClientExtensionResults().prf;
+            log('PRF get() result: ' + JSON.stringify(assertion.getClientExtensionResults()));
+            if (!prfResult2 || !prfResult2.results || !prfResult2.results.first) {
+              throw new Error('PRF failed on second attempt. Your passkey provider may not support the PRF extension.');
+            }
+            prfOutput = new Uint8Array(prfResult2.results.first);
+            log('PRF output from get: ' + prfOutput.length + ' bytes');
+          } else {
+            throw new Error('Your passkey provider does not support PRF. Extensions returned: ' + JSON.stringify(extResults));
+          }
+
+          status.textContent = '[3/5] Extracting credential data...';
+          const credId = new Uint8Array(credential.rawId);
+          log('Getting public key...');
+          const pubKeyBuf = credential.response.getPublicKey();
+          if (!pubKeyBuf) throw new Error('getPublicKey() returned null — browser may not support this API');
+          const pubKey = new Uint8Array(pubKeyBuf);
+          log('Public key: ' + pubKey.length + ' bytes');
+
+          const authData = new Uint8Array(credential.response.getAuthenticatorData());
+          const aaguidBytes = authData.slice(37, 53);
+          const aaguid = Array.from(aaguidBytes).map(b => b.toString(16).padStart(2, '0')).join('');
+          log('AAGUID: ' + aaguid);
+
+          status.textContent = '[4/5] Encrypting...';
+          log('Encrypting payload...');
+          const encrypted = await encryptPayload({
+            type: 'register',
+            credential_id: bytesToB64(credId),
+            public_key: bytesToB64(pubKey),
+            prf_output: bytesToB64(prfOutput),
+            aaguid,
+            authenticator_name: 'WebAuthn'
+          }, wrappingKeyHex);
+          log('Encrypted payload: ' + encrypted.length + ' chars');
+
+          status.textContent = '[5/5] Sending to relay...';
+          await sendToRelay(encrypted);
+
+        } else {
+          // Auth mode
+          status.textContent = '[1/4] Authenticating with passkey...';
+          log('Getting assertion with PRF...');
+          const credentialId = b64ToBytes(credIdB64);
+
+          // On Windows/Linux, prefer the local/synced passkey over a phone
+          // handoff — same reasoning as register: don't force Windows Hello
+          // (which would hide Google Password Manager) but nudge the picker
+          // away from starting with a QR step.
+          const platformAuth = detectPlatform();
+          const getPk = {
+            challenge,
+            rpId,
+            allowCredentials: [{ type: 'public-key', id: credentialId }],
+            userVerification: 'required',
+            extensions: { prf: { eval: { first: salt } } }
+          };
+          if (platformAuth !== 'other') getPk.hints = ['client-device'];
+
+          const assertion = await navigator.credentials.get({ publicKey: getPk });
+
+          clearTimeout(helpTimer);
+          log('Assertion received');
+          status.textContent = '[2/4] Checking PRF output...';
+          const extResults = assertion.getClientExtensionResults();
+          log('Extensions: ' + JSON.stringify(extResults));
+          const prfResult = extResults.prf;
+          if (!prfResult || !prfResult.results || !prfResult.results.first) {
+            throw new Error('PRF not supported. Extensions: ' + JSON.stringify(extResults));
+          }
+
+          const prfOutput = new Uint8Array(prfResult.results.first);
+          log('PRF output: ' + prfOutput.length + ' bytes');
+
+          status.textContent = '[3/4] Encrypting...';
+          const encrypted = await encryptPayload({
+            type: 'auth',
+            prf_output: bytesToB64(prfOutput)
+          }, wrappingKeyHex);
+
+          status.textContent = '[4/4] Sending to relay...';
+          await sendToRelay(encrypted);
+        }
+
+        clearTimeout(helpTimer);
+        log('SUCCESS');
+
+        document.getElementById('spinner').style.display = 'none';
+        document.getElementById('lockIcon').textContent = '\u{1f513}';
+        status.className = 'success';
+        status.textContent = mode === 'register'
+          ? 'Credential registered! You can close this tab.'
+          : 'Authenticated! You can close this tab.';
+
+      } catch (e) {
+        clearTimeout(helpTimer);
+        document.getElementById('spinner').style.display = 'none';
+        status.className = 'error';
+        const name = e.name ? `[${e.name}] ` : '';
+        status.textContent = name + (e.message || 'Unknown error');
+        log('ERROR: ' + name + e.message);
+        if (e.stack) log('Stack: ' + e.stack.split('\n').slice(0,3).join(' | '));
+        btn.style.display = 'block';
+        btn.disabled = false;
+        // Offer the fallback again during register if the user hasn't used it yet.
+        if (mode === 'register' && !useCrossPlatform) {
+          document.getElementById('altBtn').style.display = 'block';
+        }
+      }
+    });
+  </script>
+</body>
+</html>

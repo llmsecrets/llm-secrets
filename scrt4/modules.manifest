@@ -1,0 +1,82 @@
+# scrt4 v0.2 module manifest
+#
+# Each section below names a distribution. Each entry under a section is a
+# module file under daemon/bin/scrt4-modules/<name>.sh. Lines starting with #
+# are comments. The build script (scripts/build-scrt4.sh) reads this file
+# and concatenates daemon/bin/scrt4-core + the listed modules into one
+# executable bash binary per distribution.
+#
+# Adding a module: drop the file under daemon/bin/scrt4-modules/, add its
+# name here under the right distribution, run scripts/build-scrt4.sh.
+#
+# Removing a module: delete the line. The build script silently skips
+# missing modules, so commenting out is also fine for quick experiments.
+
+[hardened]
+wallet
+encrypt-folder
+menu
+tags
+import-env
+wa-toggle
+# Domain / DNS / deploy / email ops across Cloudflare, Vercel, GoDaddy,
+# AWS Route 53, GCP Cloud DNS. All provider tokens come from the vault
+# via the daemon's reveal flow — no tokens ever touch disk.
+domain
+# GitHub REST API wrapper — issues, PRs, repos. Uses GITHUB_PAT +
+# GITHUB_USERNAME from the vault. Writes (issue create/close/comment,
+# pr merge) are --yes-gated.
+github
+# GCP VM ops — wraps gcloud for status / ssh run / caddy reload / tail.
+# Uses GCP_INSTANCE_NAME / GCP_ZONE / GCP_EXTERNAL_IP from the vault.
+# Mutating ops (caddy reload) are --yes-gated.
+gcp
+# Stripe REST API wrapper — balance / charges / customers / subs / refunds.
+# Uses STRIPE_SECRET_KEY from the vault. Refunds are --yes-gated with
+# optional --amount CENTS for partial refunds.
+stripe
+# Messages — unified action-item inbox across WhatsApp / Telegram / Gmail.
+# Reads WA and TG archive JSONLs as-is (no coupling to archivers); hits
+# Gmail via OAuth (skipped cleanly if absent). Zenity GUI for triage.
+messages
+# Website — deploy static sites to Vercel + GoDaddy DNS helpers, or
+# app-mode to a GCP VM with Caddy reverse-proxy + systemd. Uses an
+# already-purchased domain; does NOT register domains. Writes are
+# --yes-gated with --dry-run plans.
+website
+# Quickstart — first-run walkthrough: prints readiness snapshot (which
+# recommended secrets are in the vault, which CLIs are installed) and
+# copy-paste add-templates. Never reveals; pure UX helper.
+quickstart
+# cloud-crypt — client-side encryption + Drive I/O + tracking (non-TCB).
+# All crypto stays in Core; the module only orchestrates + talks to the
+# Drive API.
+cloud-crypt
+# wizards — cross-module recipe flows (backup-chat / send-pgp /
+# backup-pgp-keys). Composes per-module panels via the GUI contract in
+# docs/issues/module-gui-spec.md. Fails cleanly if a participating
+# module is absent.
+wizards
+
+[native-default]
+# What the native-curl installer ships by default when no --module flags
+# are passed. These modules are considered baseline utilities — essential
+# enough that requiring an opt-in flag would be user-hostile. Every other
+# module (github, gcp, stripe, etc.) remains opt-in via --module NAME.
+encrypt-folder
+import-env
+# menu — zenity GUI launcher. Dynamically discovers registered commands,
+# so it adapts to whatever ships in the build. Falls back to cmd_help on
+# headless systems.
+menu
+# cloud-crypt — encrypted cloud-archive orchestration over Google Drive.
+# Crypto stays in Core; this module only uploads/downloads already-encrypted
+# archives. Degrades cleanly when gcloud isn't installed (prints install
+# hint; no crash).
+cloud-crypt
+
+[core-only]
+# No modules. The smallest possible build — target for formal verification
+# of the trusted computing base. Not the default native install; build with
+#   scripts/build-scrt4.sh core-only OUTPUT
+# when you need a minimal-surface binary for auditing.

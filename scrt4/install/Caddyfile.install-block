@@ -1,0 +1,44 @@
+
+install.llmsecrets.com {
+    root * /var/www/install
+    header Content-Type text/plain
+    header Cache-Control "no-cache, must-revalidate"
+
+    # Bare root → v0.1.0 Docker wrapper (primary onboarding path).
+    @root path /
+    rewrite @root /scrt4-docker.sh
+
+    # /v2 → v0.2 modular Docker wrapper.
+    @v2 path /v2
+    rewrite @v2 /scrt4-v2-docker.sh
+
+    # /native → hardened native installer (no Docker). Pulls signed binaries
+    # from /releases/<tag>/ on this host.
+    @native path /native
+    rewrite @native /scrt4-native.sh
+
+    # /zenity-macos → osascript-backed zenity shim for macOS. scrt4 view +
+    # scrt4 add open native Cocoa dialogs through this instead of gtk+3.
+    @zenity path /zenity-macos
+    rewrite @zenity /scrt4-zenity-macos.sh
+
+    # /uninstall → removes Docker wrappers, native binaries, systemd/launchd
+    # services, and (with --purge) the encrypted vault at ~/.scrt4.
+    @uninstall path /uninstall
+    rewrite @uninstall /scrt4-uninstall.sh
+
+    # /releases/* — signed release artifacts (daemon binaries, CLI bash,
+    # SHA256SUMS, latest.txt). Strip the text/plain + no-cache defaults so
+    # Caddy auto-detects the correct Content-Type and the CDN/browser can
+    # cache the immutable <tag>/ files. latest.txt is the one exception —
+    # it's a pointer, so we keep no-cache on it.
+    @releases path /releases/*
+    header @releases -Content-Type
+    header @releases Cache-Control "public, max-age=86400, immutable"
+
+    @latest path /releases/latest.txt
+    header @latest Content-Type "text/plain; charset=utf-8"
+    header @latest Cache-Control "no-cache, must-revalidate"
+
+    file_server
+}

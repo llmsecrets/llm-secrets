@@ -1,0 +1,143 @@
+name: Build and Publish Docker Images
+
+# Publishes scrt4 images to Docker Hub:
+#   - joshgottlieb/scrt4-hardened:latest       (v0.1.0 monolith — stable)
+#   - joshgottlieb/scrt4-hardened:v0.2-modular (v0.2 modular architecture)
+#
+# Source-of-truth guarantee: this workflow ONLY runs on main. Every artifact
+# published to Docker Hub is built from the exact commit on main — never
+# from a feature or fix branch. See docs/RELEASE.md.
+#
+# Required GitHub secrets:
+#   DOCKERHUB_USERNAME  - Docker Hub username
+#   DOCKERHUB_TOKEN     - Docker Hub access token
+#
+# Triggers:
+#   - Push to main (on daemon/**, Dockerfile*, scripts/**, modules.manifest)
+#   - Version tag v*.*.* on main
+#   - Manual dispatch (rebuild from current main)
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*.*.*'
+    paths:
+      - 'daemon/**'
+      - 'Dockerfile.hardened'
+      - 'Dockerfile.modular'
+      - 'scripts/**'
+      - 'modules.manifest'
+      - '.github/workflows/docker-publish.yml'
+  workflow_dispatch:
+
+jobs:
+  # ── v0.1.0 monolith (stable) ────────────────────────────────────────
+  build-stable:
+    if: >
+      github.ref == 'refs/heads/main' ||
+      startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Extract metadata (stable)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ secrets.DOCKERHUB_USERNAME }}/scrt4-hardened
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix=sha-
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=v0.1.0-stable
+          labels: |
+            org.opencontainers.image.title=scrt4-hardened
+            org.opencontainers.image.description=scrt4 secret manager — v0.1.0 stable (monolith)
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.licenses=Source-Available
+
+      - name: Build and push (stable)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile.hardened
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=hardened
+          cache-to: type=gha,mode=max,scope=hardened
+
+      - name: Run unit tests in stable image
+        run: |
+          IMAGE="${{ secrets.DOCKERHUB_USERNAME }}/scrt4-hardened:latest"
+          echo "Running unit tests in $IMAGE"
+          docker run --rm "$IMAGE" test
+
+  # ── v0.2 modular (new architecture) ─────────────────────────────────
+  build-modular:
+    if: >
+      github.ref == 'refs/heads/main' ||
+      startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Extract metadata (modular)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ secrets.DOCKERHUB_USERNAME }}/scrt4-hardened
+          tags: |
+            type=raw,value=v0.2-modular,enable={{is_default_branch}}
+            type=raw,value=modular-sha-${{ github.sha }}
+          labels: |
+            org.opencontainers.image.title=scrt4-hardened-modular
+            org.opencontainers.image.description=scrt4 secret manager — v0.2 modular architecture
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.licenses=Source-Available
+            com.scrt4.architecture=v0.2-modular
+
+      - name: Build and push (modular)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile.modular
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=modular
+          cache-to: type=gha,mode=max,scope=modular
+
+      - name: Run tests in modular image
+        run: |
+          IMAGE="${{ secrets.DOCKERHUB_USERNAME }}/scrt4-hardened:v0.2-modular"
+          echo "Running unit tests in $IMAGE"
+          docker run --rm "$IMAGE" test
+          echo "Running bash syntax check"
+          docker run --rm "$IMAGE" bash-check

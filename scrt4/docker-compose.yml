@@ -1,0 +1,57 @@
+# scrt4 full stack: daemon + auth relay
+#
+# Two build options:
+#   SCRT4_DOCKERFILE=Dockerfile.hardened  → v0.1.0 stable monolith (default)
+#   SCRT4_DOCKERFILE=Dockerfile.modular   → v0.2 modular architecture
+#
+# Usage:
+#   docker compose up -d              # Start daemon + relay
+#   docker compose exec scrt4 scrt4 status
+#   docker compose exec scrt4 scrt4 unlock
+#   docker compose exec -it scrt4 scrt4 run 'curl -H "Auth: $env[API_KEY]" https://api.example.com'
+#
+# To use the modular build:
+#   SCRT4_DOCKERFILE=Dockerfile.modular docker compose up -d
+
+services:
+  scrt4:
+    build:
+      context: .
+      dockerfile: ${SCRT4_DOCKERFILE:-Dockerfile.hardened}
+    container_name: scrt4
+    entrypoint: ["scrt4-daemon"]
+    stdin_open: true
+    tty: true
+    volumes:
+      - scrt4-vault:/home/scrt/.scrt4
+    restart: unless-stopped
+
+  # Optional: self-hosted auth relay (for WebAuthn ceremonies)
+  # Only needed if you want to self-host instead of using auth.llmsecrets.com
+  relay:
+    build: ./auth-relay/relay-server
+    container_name: scrt4-relay
+    ports:
+      - "4100:4100"
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - RELAY_PORT=4100
+    depends_on:
+      - redis
+    restart: unless-stopped
+    profiles:
+      - relay
+
+  redis:
+    image: redis:7-alpine
+    container_name: scrt4-redis
+    command: redis-server --maxmemory 50mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+    profiles:
+      - relay
+
+volumes:
+  scrt4-vault:
+  redis-data:

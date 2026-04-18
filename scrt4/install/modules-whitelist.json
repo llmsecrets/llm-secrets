@@ -1,0 +1,23 @@
+{
+  "_comment_1": "Source-of-truth list of scrt4 modules approved for opt-in install via the native installer's --module NAME flag. The sync timer on install.llmsecrets.com reads this file, computes a SHA256 of daemon/bin/scrt4-modules/<name>.sh for each entry, and writes the final modules.json (with sha256 pinned) served at https://install.llmsecrets.com/modules.json. The module .sh files themselves are served at https://install.llmsecrets.com/modules/<name>.sh.",
+  "_comment_2": "To approve a new module: (1) land it under daemon/bin/scrt4-modules/, (2) add its name here, (3) merge. The sync timer picks it up within 60s. To remove, delete the line — the installer will reject any request for it.",
+  "_comment_3": "Default native install is native-default (encrypt-folder + import-env + cloud-crypt, spliced into the release artifact at build time). Users opt in to extras explicitly: `curl ... | sh -s -- --module github`. Unknown or non-whitelisted names are rejected before any code is fetched.",
+  "version": 1,
+  "approved": [
+    "quickstart",
+    "menu",
+    "github",
+    "gcp",
+    "stripe",
+    "domain",
+    "website",
+    "messages",
+    "cloud-crypt",
+    "wizards",
+    "wallet",
+    "import-env",
+    "tags",
+    "encrypt-folder",
+    "wa-toggle"
+  ]
+}

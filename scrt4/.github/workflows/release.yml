@@ -1,0 +1,250 @@
+name: Release native binaries
+
+# Builds the scrt4-daemon Rust binary for all supported OS/arch pairs plus
+# the assembled bash CLI, and publishes them as release artifacts with a
+# SHA256SUMS file the native installer verifies.
+#
+# Artifacts published to the GitHub Release for the triggering tag:
+#   scrt4-daemon-linux-x86_64
+#   scrt4-daemon-linux-aarch64
+#   scrt4-daemon-darwin-aarch64  (Apple Silicon — Intel Macs run this via Rosetta 2)
+#   scrt4                       (native-default distribution, bash)
+#   SHA256SUMS
+#
+# Triggers:
+#   - Version tag v*.*.* (the canonical release path)
+#   - Manual dispatch with a tag input (for dry runs / re-cuts)
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to (re)build artifacts for'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  # ── Build the Rust daemon on each target ─────────────────────────────
+  build-daemon:
+    name: daemon (${{ matrix.os_label }}/${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os_label: linux
+            arch: x86_64
+            runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            cross: false
+          - os_label: linux
+            arch: aarch64
+            runner: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            cross: true
+          - os_label: darwin
+            arch: aarch64
+            runner: macos-latest
+            target: aarch64-apple-darwin
+            cross: false
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross-compilation deps (linux/aarch64)
+        if: matrix.cross == true
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+          mkdir -p .cargo
+          cat >> .cargo/config.toml <<'EOF'
+          [target.aarch64-unknown-linux-gnu]
+          linker = "aarch64-linux-gnu-gcc"
+          EOF
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            daemon/target
+          key: cargo-${{ matrix.target }}-${{ hashFiles('daemon/Cargo.lock') }}
+
+      - name: Build daemon (release, ${{ matrix.target }})
+        working-directory: daemon
+        run: cargo build --release --locked --bin scrt4-daemon --target ${{ matrix.target }}
+
+      - name: Rename artifact
+        run: |
+          mkdir -p artifacts
+          cp daemon/target/${{ matrix.target }}/release/scrt4-daemon \
+             artifacts/scrt4-daemon-${{ matrix.os_label }}-${{ matrix.arch }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: scrt4-daemon-${{ matrix.os_label }}-${{ matrix.arch }}
+          path: artifacts/scrt4-daemon-${{ matrix.os_label }}-${{ matrix.arch }}
+          if-no-files-found: error
+
+  # ── Build the bash CLI (native-default distribution) ────────────────
+  # Default ship is native-default: the TCB core (unlock, add, view,
+  # list, run, backup-*, recover) plus encrypt-folder + import-env,
+  # which are essential enough that opt-in would be user-hostile.
+  # Everything else (github, gcp, stripe, etc.) remains opt-in at
+  # install time via scrt4-native.sh --module NAME, which fetches the
+  # per-module source from install.llmsecrets.com/modules/<name>.sh
+  # and sha-verifies it against the allowlist manifest at
+  # install.llmsecrets.com/modules.json.
+  build-cli:
+    name: cli (native-default)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Assemble scrt4 native-default CLI
+        env:
+          # Stamp the runtime VERSION string from the release tag so
+          # `scrt4 version` reports e.g. "0.2.1-community" instead of the
+          # in-repo "-dev" placeholder.
+          SCRT4_VERSION: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          mkdir -p artifacts
+          scripts/build-scrt4.sh native-default artifacts/scrt4
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: scrt4-cli
+          path: artifacts/scrt4
+          if-no-files-found: error
+
+  # ── Collect artifacts, compute SHA256SUMS, publish release ───────────
+  publish:
+    name: publish release
+    needs: [build-daemon, build-cli]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (for release notes context only)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Flatten + compute checksums
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          # download-artifact places each artifact in its own subdir named
+          # after the upload name. Flatten to a single dir.
+          find dist -type f \( -name 'scrt4-daemon-*' -o -name 'scrt4' \) \
+            -exec cp {} out/ \;
+          chmod 0755 out/*
+          (cd out && sha256sum scrt4-daemon-* scrt4 > SHA256SUMS)
+          echo "── release artifacts ──"
+          ls -la out
+          echo
+          echo "── SHA256SUMS ──"
+          cat out/SHA256SUMS
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          files: |
+            out/scrt4-daemon-linux-x86_64
+            out/scrt4-daemon-linux-aarch64
+            out/scrt4-daemon-darwin-aarch64
+            out/scrt4
+            out/SHA256SUMS
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+
+      # ── Upload to install.llmsecrets.com ───────────────────────────
+      # The release host is authoritative for `curl | sh` installs: that's
+      # where scrt4-native.sh (served at /native) resolves `latest.txt`
+      # and fetches per-tag binaries. We scp directly under the tagged dir
+      # and atomically flip latest.txt so the version swap is observable.
+      #
+      # Required GitHub Actions secrets (set in repo → Settings → Secrets):
+      #   SCRT4_RELEASE_SSH_KEY   — private ed25519 key for scrt4-release@server
+      #   SCRT4_RELEASE_SSH_HOST  — prod-repo-app-instance-v001 public IP / FQDN
+      #   SCRT4_RELEASE_SSH_USER  — scrt4-release (server deploy user)
+      #   SCRT4_RELEASE_SSH_KNOWN_HOSTS — output of `ssh-keyscan <host>` to pin the host key
+      #
+      # Server-side setup is documented in install/server-setup-release-user.sh.
+      - name: Deploy to install.llmsecrets.com
+        env:
+          SSH_KEY:    ${{ secrets.SCRT4_RELEASE_SSH_KEY }}
+          SSH_HOST:   ${{ secrets.SCRT4_RELEASE_SSH_HOST }}
+          SSH_USER:   ${{ secrets.SCRT4_RELEASE_SSH_USER }}
+          KNOWN_HOSTS: ${{ secrets.SCRT4_RELEASE_SSH_KNOWN_HOSTS }}
+          TAG:        ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SSH_KEY}" ] || [ -z "${SSH_HOST}" ] || [ -z "${SSH_USER}" ]; then
+            echo "::warning title=llmsecrets deploy skipped::SSH secrets are not configured."
+            echo "  Set SCRT4_RELEASE_SSH_KEY, SCRT4_RELEASE_SSH_HOST, SCRT4_RELEASE_SSH_USER"
+            echo "  to enable pushing binaries to install.llmsecrets.com automatically."
+            exit 0
+          fi
+
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          if [ -n "${KNOWN_HOSTS}" ]; then
+            printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+            chmod 644 ~/.ssh/known_hosts
+          else
+            ssh-keyscan -H "$SSH_HOST" > ~/.ssh/known_hosts 2>/dev/null
+          fi
+
+          REMOTE="${SSH_USER}@${SSH_HOST}"
+          REL_ROOT="/var/www/install/releases"
+          REL_DIR="${REL_ROOT}/${TAG}"
+
+          echo "── staging ${TAG} → ${REMOTE}:${REL_DIR}"
+          ssh "$REMOTE" "mkdir -p '${REL_DIR}'"
+          scp out/scrt4-daemon-linux-x86_64 \
+              out/scrt4-daemon-linux-aarch64 \
+              out/scrt4-daemon-darwin-aarch64 \
+              out/scrt4 \
+              out/SHA256SUMS \
+              "${REMOTE}:${REL_DIR}/"
+
+          # Atomic latest.txt flip — write to .new then mv. The native
+          # installer resolves the tag from latest.txt on every fresh
+          # install, so this single filename is the CDN-observable cutover.
+          printf '%s\n' "$TAG" > latest.txt
+          scp latest.txt "${REMOTE}:${REL_ROOT}/latest.txt.new"
+          ssh "$REMOTE" "mv '${REL_ROOT}/latest.txt.new' '${REL_ROOT}/latest.txt'"
+
+          echo "── verifying served tag"
+          served="$(curl -fsSL "https://install.llmsecrets.com/releases/latest.txt" | tr -d '[:space:]')"
+          if [ "$served" != "$TAG" ]; then
+            echo "::error title=llmsecrets deploy failed::served tag '$served' != expected '$TAG'"
+            exit 1
+          fi
+          echo "── deployed: https://install.llmsecrets.com/releases/${TAG}/"

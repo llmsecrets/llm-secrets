@@ -1,0 +1,8 @@
+daemon/target
+auth-relay/node_modules
+auth-relay/relay-server/node_modules
+.git
+*.md
+!README.md
+LICENSE
+legal/

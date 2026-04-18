@@ -1,0 +1,60 @@
+name: install.llmsecrets.com smoke test
+
+# Validates the install scripts on PR and verifies the live URL after merge.
+# No deploy step — install.llmsecrets.com is a Caddy reverse_proxy to
+# raw.githubusercontent.com/VestedJosh/scrt4/main/install/, so any push to main
+# is automatically live (modulo GitHub's ~5 minute raw CDN cache).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'install/**'
+      - '.github/workflows/install-smoke-test.yml'
+  pull_request:
+    paths:
+      - 'install/**'
+      - '.github/workflows/install-smoke-test.yml'
+  workflow_dispatch:
+
+jobs:
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - name: Shellcheck install/scrt4-docker.sh
+        run: shellcheck install/scrt4-docker.sh
+      - name: Syntax check
+        run: bash -n install/scrt4-docker.sh
+
+  verify-live:
+    # Only run on push to main — verifies the live URL picked up the change.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Wait for raw CDN to update
+        run: sleep 60
+      - name: Verify live URL serves Docker wrapper
+        run: |
+          for attempt in 1 2 3 4 5; do
+            body=$(curl -fsSL https://install.llmsecrets.com/ || true)
+            repo_body=$(cat install/scrt4-docker.sh)
+            if [ "$body" = "$repo_body" ]; then
+              echo "Live URL matches repo on attempt $attempt"
+              exit 0
+            fi
+            echo "Attempt $attempt: live URL does not match repo yet, retrying in 60s..."
+            sleep 60
+          done
+          echo "Live URL did not match repo after 5 attempts (~5 minutes)"
+          echo "--- live ---"
+          echo "$body"
+          echo "--- repo ---"
+          echo "$repo_body"
+          exit 1
+      - name: Verify /install.sh is reachable
+        run: curl -fsSL https://install.llmsecrets.com/install.sh | head -1 | grep -q bash

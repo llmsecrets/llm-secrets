@@ -1,0 +1,174 @@
+# Dockerfile.hardened — scrt4 with critical secret re-authentication (#15)
+#
+# This is an isolated build of scrt4 that includes passkey re-authentication
+# for critical secrets (PRIVATE_KEY, SEED_PHRASE, etc.). It runs entirely
+# inside a Docker container and does NOT touch your host system.
+#
+# The "hardened" build adds: daemon-enforced WA re-auth on `scrt4 run` when
+# the command references a critical secret (by pattern or `critical` tag).
+#
+# Usage:
+#   docker build -f Dockerfile.hardened -t scrt4-hardened .
+#   docker run -it scrt4-hardened test          # Run Rust tests (49 tests)
+#   docker run -it scrt4-hardened bash-check    # Syntax-check CLI
+#   docker run -it scrt4-hardened smoke         # Smoke test daemon + CLI
+#   docker run -it scrt4-hardened shell         # Interactive shell
+#
+# Persistent vault (recommended for day-to-day use):
+#   docker run -it -v scrt4-vault:/home/scrt/.scrt4 scrt4-hardened shell
+#
+# All code is COPIED into the container — changes here do NOT affect host.
+
+# ── Stage 1: Build the Rust daemon ──────────────────────────────────
+FROM rust:latest AS builder
+
+WORKDIR /build/daemon
+COPY daemon/Cargo.toml daemon/Cargo.lock ./
+COPY daemon/src ./src
+
+# Build release + tests
+RUN cargo build --release --bin scrt4-daemon \
+    && cargo test --release 2>&1 | tee /build/test-output.txt; \
+    echo $? > /build/test-exit-code
+
+# ── Stage 2: Dev runtime ───────────────────────────────────────────
+FROM debian:trixie-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        bash \
+        curl \
+        ca-certificates \
+        jq \
+        socat \
+        python3-minimal \
+        python3-pip \
+        python3-cryptography \
+        magic-wormhole \
+        qrencode \
+        zenity \
+        nodejs \
+        npm \
+    && rm -rf /var/lib/apt/lists/*
+
+# Claude Code CLI (installed globally so the `scrt` user can run `claude`).
+# Auth is NOT baked into the image — pass ANTHROPIC_API_KEY at docker run,
+# or mount ~/.claude as a volume to persist an OAuth login across runs.
+RUN npm install -g @anthropic-ai/claude-code \
+    && npm cache clean --force
+
+# Create non-root user
+RUN useradd -m -s /bin/bash scrt \
+    && mkdir -p /home/scrt/.scrt4 /home/scrt/.claude \
+    && chown -R scrt:scrt /home/scrt
+
+# Shell aliases for Claude Code (mirrors host-side oc/cc shortcuts)
+RUN echo "alias oc='claude --dangerously-skip-permissions'" >> /home/scrt/.bashrc \
+    && echo "alias cc='claude --dangerously-skip-permissions --continue'" >> /home/scrt/.bashrc \
+    && chown scrt:scrt /home/scrt/.bashrc
+
+# Copy daemon binary
+COPY --from=builder /build/daemon/target/release/scrt4-daemon /usr/local/bin/scrt4-daemon
+
+# Copy test results
+COPY --from=builder /build/test-output.txt /home/scrt/test-output.txt
+COPY --from=builder /build/test-exit-code /home/scrt/test-exit-code
+
+# Copy CLI script
+COPY daemon/bin/scrt4 /usr/local/bin/scrt4
+
+# Patch issue #30: remove share/receive from the _bg_if_gui dispatcher.
+#
+# The shared daemon/bin/scrt4 routes `share` and `receive` through
+# _bg_if_gui, which forks the command with `& disown` whenever zenity is
+# present. Those two subcommands are fundamentally interactive — wormhole
+# prints its code to stdout, WebAuthn challenges open a browser, and the
+# receive flow prompts for import confirmation. Backgrounding them hides
+# the wormhole code entirely and breaks the interactive flow.
+#
+# Fix: skip _bg_if_gui for share/receive so they stay in the foreground.
+# This is a UX/correctness patch only — it does not touch authentication,
+# AES-GCM ephemeral encryption, the wormhole SPAKE2 transport, or the
+# tmpfs temp-file shredding. All security gates (ensure_unlocked,
+# reveal_all bulk-reveal WebAuthn challenge) run regardless of fg/bg.
+#
+# Ref: https://github.com/VestedJosh/scrt4/issues/30
+#
+# NOT yet applied to Dockerfile.hardened-v2 — see daemon/TODO.md under
+# "Hardened-v2 formal-verification backlog". v2 must re-verify before
+# taking this patch.
+RUN sed -i \
+        -e 's|_bg_if_gui cmd_share "$@"|cmd_share "$@"|' \
+        -e 's|_bg_if_gui cmd_share --receive "$@"|cmd_share --receive "$@"|' \
+        /usr/local/bin/scrt4 \
+ && if grep -q '_bg_if_gui cmd_share' /usr/local/bin/scrt4; then \
+        echo "ERROR: issue #30 patch failed — '_bg_if_gui cmd_share' still present in CLI after sed. The upstream source pattern may have changed; update this Dockerfile." >&2; \
+        exit 1; \
+    fi \
+ && grep -q 'shift; cmd_share "\$@"' /usr/local/bin/scrt4 \
+ && grep -q 'shift; cmd_share --receive "\$@"' /usr/local/bin/scrt4
+
+RUN chmod +x /usr/local/bin/scrt4 /usr/local/bin/scrt4-daemon
+
+# Copy source for reference
+COPY daemon/src /home/scrt/src
+
+# Set runtime directory
+ENV XDG_RUNTIME_DIR=/tmp/scrt4-runtime
+RUN mkdir -p /tmp/scrt4-runtime && chown scrt:scrt /tmp/scrt4-runtime
+
+# Entrypoint script for dev commands
+RUN echo '#!/bin/bash' > /home/scrt/entrypoint.sh \
+    && echo 'set -euo pipefail' >> /home/scrt/entrypoint.sh \
+    && echo 'case "${1:-help}" in' >> /home/scrt/entrypoint.sh \
+    && echo '    test)' >> /home/scrt/entrypoint.sh \
+    && echo '        echo "=== Rust test results ==="' >> /home/scrt/entrypoint.sh \
+    && echo '        cat /home/scrt/test-output.txt' >> /home/scrt/entrypoint.sh \
+    && echo '        exit_code=$(cat /home/scrt/test-exit-code)' >> /home/scrt/entrypoint.sh \
+    && echo '        exit "$exit_code"' >> /home/scrt/entrypoint.sh \
+    && echo '        ;;' >> /home/scrt/entrypoint.sh \
+    && echo '    bash-check)' >> /home/scrt/entrypoint.sh \
+    && echo '        echo "=== Bash syntax check ==="' >> /home/scrt/entrypoint.sh \
+    && echo '        bash -n /usr/local/bin/scrt4' >> /home/scrt/entrypoint.sh \
+    && echo '        echo "PASS: CLI syntax is valid"' >> /home/scrt/entrypoint.sh \
+    && echo '        ;;' >> /home/scrt/entrypoint.sh \
+    && echo '    smoke)' >> /home/scrt/entrypoint.sh \
+    && echo '        echo "=== Smoke test ==="' >> /home/scrt/entrypoint.sh \
+    && echo '        scrt4-daemon &' >> /home/scrt/entrypoint.sh \
+    && echo '        sleep 1' >> /home/scrt/entrypoint.sh \
+    && echo '        echo "Testing: scrt4 status"' >> /home/scrt/entrypoint.sh \
+    && echo '        scrt4 status || true' >> /home/scrt/entrypoint.sh \
+    && echo '        echo "Testing: scrt4 help"' >> /home/scrt/entrypoint.sh \
+    && echo '        scrt4 help > /dev/null' >> /home/scrt/entrypoint.sh \
+    && echo '        echo "Testing: scrt4 list-encrypted"' >> /home/scrt/entrypoint.sh \
+    && echo '        scrt4 list-encrypted || true' >> /home/scrt/entrypoint.sh \
+    && echo '        echo "Testing: scrt4 critical"' >> /home/scrt/entrypoint.sh \
+    && echo '        scrt4 critical || true' >> /home/scrt/entrypoint.sh \
+    && echo '        kill %1 2>/dev/null || true' >> /home/scrt/entrypoint.sh \
+    && echo '        echo "PASS: Smoke tests completed"' >> /home/scrt/entrypoint.sh \
+    && echo '        ;;' >> /home/scrt/entrypoint.sh \
+    && echo '    shell)' >> /home/scrt/entrypoint.sh \
+    && echo '        exec /bin/bash' >> /home/scrt/entrypoint.sh \
+    && echo '        ;;' >> /home/scrt/entrypoint.sh \
+    && echo '    *)' >> /home/scrt/entrypoint.sh \
+    && echo '        echo "Usage: docker run -it scrt4-hardened {test|bash-check|smoke|shell}"' >> /home/scrt/entrypoint.sh \
+    && echo '        ;;' >> /home/scrt/entrypoint.sh \
+    && echo 'esac' >> /home/scrt/entrypoint.sh \
+    && chmod +x /home/scrt/entrypoint.sh \
+    && chown scrt:scrt /home/scrt/entrypoint.sh
+
+USER scrt
+WORKDIR /home/scrt
+
+# Tags file for critical secret testing
+RUN echo '{}' > /home/scrt/.scrt4/tags.json
+
+# Persist vault + Claude Code state across container restarts. Mount with:
+#   docker run -v scrt4-vault:/home/scrt/.scrt4 \
+#              -v scrt4-claude:/home/scrt/.claude ...
+# Without an explicit -v, Docker creates anonymous volumes so data survives
+# `docker stop`/`docker start` on the same container.
+VOLUME /home/scrt/.scrt4
+VOLUME /home/scrt/.claude
+
+ENTRYPOINT ["/home/scrt/entrypoint.sh"]
+CMD ["help"]

@@ -1,0 +1,35 @@
+{
+  "rewrites": [
+    { "source": "/api/relay/shorten", "destination": "/api/relay/shorten" },
+    { "source": "/api/relay/resolve/:code", "destination": "/api/relay/resolve/[code]" },
+    { "source": "/api/relay/vapid-public-key", "destination": "/api/relay/vapid-public-key" },
+    { "source": "/api/relay/register-device", "destination": "/api/relay/register-device" },
+    { "source": "/api/relay/push", "destination": "/api/relay/push" },
+    { "source": "/s/:code", "destination": "/api/s/[code]" },
+    { "source": "/api/relay/:id", "destination": "/api/relay/[id]" }
+  ],
+  "headers": [
+    {
+      "source": "/api/(.*)",
+      "headers": [
+        { "key": "Access-Control-Allow-Origin", "value": "*" },
+        { "key": "Access-Control-Allow-Methods", "value": "GET, POST, OPTIONS" },
+        { "key": "Access-Control-Allow-Headers", "value": "Content-Type" }
+      ]
+    },
+    {
+      "source": "/(.*).html",
+      "headers": [
+        { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" },
+        { "key": "Pragma", "value": "no-cache" }
+      ]
+    },
+    {
+      "source": "/s/(.*)",
+      "headers": [
+        { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" },
+        { "key": "Pragma", "value": "no-cache" }
+      ]
+    }
+  ]
+}

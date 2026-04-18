@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LLM Secrets — Auth Relay</title>
+  <meta name="theme-color" content="#0a0a0a">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" type="image/svg+xml" href="/icon.svg">
+  <link rel="apple-touch-icon" href="/icon-192.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="LLM Secrets">
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      display: flex; justify-content: center; align-items: center;
+      min-height: 100vh; background: #0a0a0a; color: #e5e5e5; margin: 0;
+    }
+    .container { text-align: center; max-width: 480px; padding: 40px; }
+    h1 { font-size: 32px; margin-bottom: 8px; }
+    .sub { color: #888; margin-bottom: 32px; }
+    .info { color: #666; font-size: 14px; line-height: 1.6; }
+    a { color: #3b82f6; text-decoration: none; }
+    .push-section {
+      margin-bottom: 24px; padding: 16px; background: #1a1a1a;
+      border-radius: 12px; border: 1px solid #333;
+    }
+    .push-btn {
+      display: inline-block; padding: 10px 20px;
+      background: #10b981; color: #fff; border: none; border-radius: 8px;
+      font-size: 14px; font-weight: 600; cursor: pointer; transition: background 0.2s;
+    }
+    .push-btn:hover { background: #059669; }
+    .push-btn:disabled { background: #374151; cursor: not-allowed; color: #9ca3af; }
+    .push-status { color: #888; font-size: 13px; margin-top: 8px; min-height: 18px; }
+    .push-enabled { color: #10b981; }
+    .install-section {
+      margin-bottom: 24px; padding: 16px; background: #1a1a1a;
+      border-radius: 12px; border: 1px solid #333; display: none;
+    }
+    .install-btn {
+      display: inline-block; padding: 10px 20px;
+      background: #3b82f6; color: #fff; border: none; border-radius: 8px;
+      font-size: 14px; font-weight: 600; cursor: pointer; transition: background 0.2s;
+    }
+    .install-btn:hover { background: #2563eb; }
+    .install-hint {
+      color: #9ca3af; font-size: 13px; line-height: 1.5; text-align: left;
+    }
+    .install-hint strong { color: #e5e5e5; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>&#x1f512; auth.llmsecrets.com</h1>
+    <p class="sub">WebAuthn relay for scrt4</p>
+    <div class="install-section" id="installSection">
+      <button id="installBtn" class="install-btn" style="display:none;">Add to Home Screen</button>
+      <div class="install-hint" id="installHint"></div>
+    </div>
+    <div class="push-section" id="pushSection" style="display:none;">
+      <button id="pushBtn" class="push-btn">Enable Push Notifications</button>
+      <div class="push-status" id="pushStatus"></div>
+    </div>
+    <p class="info">
+      This service relays encrypted WebAuthn authentication between your phone and your computer.
+      No secrets are ever visible to this server &mdash; all payloads are encrypted end-to-end.
+    </p>
+    <p class="info" style="margin-top: 16px;">
+      <a href="https://github.com/llmsecrets/llm-secrets">github.com/llmsecrets/llm-secrets</a>
+    </p>
+  </div>
+  <script>
+    // --- Install to home screen (PWA) ---
+    // Android Chrome fires `beforeinstallprompt` so we can wire a one-tap
+    // install button. iOS Safari never fires it — we detect iOS and show
+    // text instructions for Share → Add to Home Screen instead. Users on
+    // desktop or already-installed PWAs see nothing (the section stays
+    // display:none).
+    const installSection = document.getElementById('installSection');
+    const installBtn = document.getElementById('installBtn');
+    const installHint = document.getElementById('installHint');
+    const isStandalone =
+      window.matchMedia('(display-mode: standalone)').matches ||
+      window.navigator.standalone === true;
+    const ua = navigator.userAgent || '';
+    // iPadOS 13+ reports a Macintosh UA in "desktop mode" — the touch-point
+    // count is the reliable tell (phones/desktops report ≤ 1).
+    const isIPadDesktopMode = /Macintosh/.test(ua) && navigator.maxTouchPoints > 1;
+    const isIOS = (/iPhone|iPad|iPod/.test(ua) || isIPadDesktopMode) && !window.MSStream;
+    const isAndroid = /Android/.test(ua);
+
+    let deferredInstallPrompt = null;
+    window.addEventListener('beforeinstallprompt', (e) => {
+      e.preventDefault();
+      deferredInstallPrompt = e;
+      if (isStandalone) return;
+      installSection.style.display = 'block';
+      installBtn.style.display = 'inline-block';
+      installHint.innerHTML = 'Install this page on your home screen so you can open it with one tap for every unlock.';
+    });
+
+    installBtn.addEventListener('click', async () => {
+      if (!deferredInstallPrompt) return;
+      installBtn.disabled = true;
+      deferredInstallPrompt.prompt();
+      const { outcome } = await deferredInstallPrompt.userChoice;
+      deferredInstallPrompt = null;
+      if (outcome === 'accepted') {
+        installSection.style.display = 'none';
+      } else {
+        installBtn.disabled = false;
+      }
+    });
+
+    if (!isStandalone && isIOS) {
+      installSection.style.display = 'block';
+      installHint.innerHTML =
+        '<strong>Pin this page to your home screen</strong> so you can tap it every time you unlock.<br>' +
+        'Tap the <strong>Share</strong> button at the bottom of Safari, then choose <strong>Add to Home Screen</strong>.';
+    } else if (!isStandalone && isAndroid && !deferredInstallPrompt) {
+      // Android Chrome didn't fire beforeinstallprompt yet — still show a
+      // text hint so users know the option exists via the browser menu.
+      installSection.style.display = 'block';
+      installHint.innerHTML =
+        '<strong>Pin this page to your home screen</strong> for one-tap unlocks.<br>' +
+        'Open the browser menu and choose <strong>Install app</strong> or <strong>Add to Home screen</strong>.';
+    }
+
+    // --- Push Notifications ---
+    const RELAY_BASE = 'https://auth.llmsecrets.com';
+    const pushSection = document.getElementById('pushSection');
+    const pushBtn = document.getElementById('pushBtn');
+    const pushStatus = document.getElementById('pushStatus');
+
+    async function registerSubscription(reg) {
+      const resp = await fetch(`${RELAY_BASE}/api/relay/vapid-public-key`);
+      const { publicKey } = await resp.json();
+      const applicationServerKey = urlBase64ToUint8Array(publicKey);
+      const subscription = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey,
+      });
+      await fetch(`${RELAY_BASE}/api/relay/register-device`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          subscription: subscription.toJSON(),
+          device_name: navigator.userAgent.includes('iPhone') ? 'iPhone' :
+                       navigator.userAgent.includes('Android') ? 'Android' : 'Browser',
+        }),
+      });
+      return subscription;
+    }
+
+    function showEnabled() {
+      pushBtn.textContent = 'Notifications Enabled — Tap to Re-register';
+      pushBtn.disabled = false;
+      pushStatus.textContent = 'You will receive push notifications for unlock requests.';
+      pushStatus.classList.add('push-enabled');
+    }
+
+    async function initPush() {
+      if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+        pushSection.style.display = 'block';
+        pushStatus.textContent = 'Push not supported in this browser. On iOS, Add to Home Screen first.';
+        pushBtn.style.display = 'none';
+        return;
+      }
+      pushSection.style.display = 'block';
+
+      const reg = await navigator.serviceWorker.register('/sw.js');
+      await navigator.serviceWorker.ready;
+
+      // Permission already denied: surface that so the user knows why nothing fires.
+      if (Notification.permission === 'denied') {
+        pushStatus.textContent = 'Notifications blocked. Enable them in site settings.';
+        pushBtn.disabled = true;
+        return;
+      }
+
+      const existing = await reg.pushManager.getSubscription();
+      if (existing && Notification.permission === 'granted') {
+        // Always re-register with the relay in case the server purged this
+        // endpoint as stale (happens after 410 Gone). This is idempotent.
+        try {
+          await fetch(`${RELAY_BASE}/api/relay/register-device`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              subscription: existing.toJSON(),
+              device_name: navigator.userAgent.includes('iPhone') ? 'iPhone' :
+                           navigator.userAgent.includes('Android') ? 'Android' : 'Browser',
+            }),
+          });
+        } catch {}
+        showEnabled();
+      }
+
+      pushBtn.addEventListener('click', async () => {
+        pushBtn.disabled = true;
+        pushBtn.textContent = '...';
+        pushStatus.classList.remove('push-enabled');
+        try {
+          const permission = await Notification.requestPermission();
+          if (permission !== 'granted') {
+            pushStatus.textContent = 'Notification permission denied.';
+            pushBtn.textContent = 'Enable Push Notifications';
+            pushBtn.disabled = false;
+            return;
+          }
+          // Re-subscribe from scratch: unsubscribe first if we had a stale one.
+          const stale = await reg.pushManager.getSubscription();
+          if (stale) await stale.unsubscribe();
+          await registerSubscription(reg);
+          showEnabled();
+        } catch (err) {
+          pushStatus.textContent = 'Failed: ' + err.message;
+          pushBtn.textContent = 'Enable Push Notifications';
+          pushBtn.disabled = false;
+        }
+      });
+    }
+
+    function urlBase64ToUint8Array(base64String) {
+      const padding = '='.repeat((4 - base64String.length % 4) % 4);
+      const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+      const rawData = atob(base64);
+      return Uint8Array.from([...rawData].map(c => c.charCodeAt(0)));
+    }
+
+    initPush();
+  </script>
+</body>
+</html>

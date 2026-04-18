@@ -1,0 +1,53 @@
+name: Guard publish triggers
+
+# Tripwire: fails any PR that re-introduces a non-main branch trigger into
+# docker-publish.yml. This is the third layer of defense that enforces the
+# "main is source of truth" rule described in docs/RELEASE.md.
+#
+# History: before this guard existed, the hardened-image pipeline quietly
+# lived on feature/15-critical-secret-reauth while bug fixes merged to main.
+# Fixes that users needed never reached the published image because main
+# wasn't the publish trigger. This workflow ensures that can't happen again.
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/docker-publish.yml'
+      - '.github/workflows/guard-publish-triggers.yml'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/docker-publish.yml'
+      - '.github/workflows/guard-publish-triggers.yml'
+
+jobs:
+  assert-main-only:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assert docker-publish.yml only triggers on main
+        run: |
+          set -euo pipefail
+          WF=.github/workflows/docker-publish.yml
+
+          branches=$(yq '.on.push.branches // [] | .[]' "$WF")
+          echo "Configured push branches: $branches"
+
+          # Exactly one branch allowed: main
+          count=$(echo "$branches" | grep -c . || echo 0)
+          if [ "$count" -ne 1 ] || [ "$branches" != "main" ]; then
+            echo "::error::docker-publish.yml must trigger ONLY on push to main."
+            echo "::error::See docs/RELEASE.md for the 'source of truth' rule."
+            echo "::error::Found branches: $branches"
+            exit 1
+          fi
+
+          # The job-level ref check must also be intact.
+          if ! grep -Eq "github\.ref == 'refs/heads/main'" "$WF"; then
+            echo "::error::The belt-and-suspenders ref check on the build-and-push job is missing."
+            echo "::error::Expected: if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')"
+            exit 1
+          fi
+
+          echo "OK — docker-publish.yml is main-only."

@@ -1,0 +1,86 @@
+name: Deploy auth relay
+
+# Pushes auth-relay/public/* to install.llmsecrets.com's sibling host dir
+# (/home/jgott/scrt4-relay/public/) so the WebAuthn page can change independently
+# of tagged binary releases. Static files only — the node relay's index.js lives
+# in the same repo but is deployed by a separate manual step today.
+#
+# Triggers:
+#   - push to main/public-llmsecrets-sanitized when auth-relay/** changes
+#   - manual workflow_dispatch (re-push current branch's files)
+#
+# Each upload lands as <file>.new and is swapped into place with an atomic mv,
+# so Caddy never sees a half-written file. See install/server-setup-release-user.sh
+# for the SSH wrapper that whitelists these specific paths.
+
+on:
+  push:
+    branches:
+      - main
+      - 'public/llmsecrets-sanitized'
+    paths:
+      - 'auth-relay/public/**'
+      - '.github/workflows/deploy-relay.yml'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: scp auth-relay/public → llmsecrets.com
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Deploy to auth.llmsecrets.com
+        env:
+          SSH_KEY:     ${{ secrets.SCRT4_RELEASE_SSH_KEY }}
+          SSH_HOST:    ${{ secrets.SCRT4_RELEASE_SSH_HOST }}
+          SSH_USER:    ${{ secrets.SCRT4_RELEASE_SSH_USER }}
+          KNOWN_HOSTS: ${{ secrets.SCRT4_RELEASE_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SSH_KEY}" ] || [ -z "${SSH_HOST}" ] || [ -z "${SSH_USER}" ]; then
+            echo "::warning title=relay deploy skipped::SSH secrets are not configured."
+            echo "  Set SCRT4_RELEASE_SSH_KEY, SCRT4_RELEASE_SSH_HOST, SCRT4_RELEASE_SSH_USER"
+            echo "  to enable pushing auth.html updates to auth.llmsecrets.com."
+            exit 0
+          fi
+
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          if [ -n "${KNOWN_HOSTS}" ]; then
+            printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+            chmod 644 ~/.ssh/known_hosts
+          else
+            ssh-keyscan -H "$SSH_HOST" > ~/.ssh/known_hosts 2>/dev/null
+          fi
+
+          REMOTE="${SSH_USER}@${SSH_HOST}"
+          REMOTE_DIR="/home/jgott/scrt4-relay/public"
+
+          # Walk the local public/ tree; for each file, upload as <file>.new
+          # and atomic-mv it into place. The SSH wrapper only allows the
+          # literal scp pattern + the .new→final rename, so we can't shortcut
+          # with rsync or a single scp of the directory.
+          cd auth-relay/public
+          for f in *; do
+            [ -f "$f" ] || continue
+            echo "── uploading $f"
+            scp "$f" "${REMOTE}:${REMOTE_DIR}/${f}.new"
+            ssh "$REMOTE" "mv '${REMOTE_DIR}/${f}.new' '${REMOTE_DIR}/${f}'"
+          done
+
+          # Smoke test — fetch the live auth.html and confirm it has the
+          # "detectPlatform" marker the new picker code introduces. If the
+          # live origin still serves a stale copy, fail loudly so we notice.
+          echo "── verifying live copy"
+          live="$(curl -fsSL https://auth.llmsecrets.com/auth.html)"
+          if ! printf '%s' "$live" | grep -q 'detectPlatform'; then
+            echo "::error title=relay deploy failed::live auth.html missing detectPlatform marker"
+            exit 1
+          fi
+          echo "── deployed: https://auth.llmsecrets.com/auth.html"

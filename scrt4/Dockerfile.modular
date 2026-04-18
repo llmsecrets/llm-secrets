@@ -1,0 +1,154 @@
+# Dockerfile.modular — scrt4 v0.2 hardened (modular architecture)
+#
+# This builds the v0.2 modular scrt4 binary from scrt4-core + [hardened]
+# modules via build-scrt4.sh. It replaces the v0.1.0 monolith with the
+# architecture described in docs/ARCHITECTURE-V0.2.md.
+#
+# Backwards-compatible with v0.1.0 monolith: all user-facing commands
+# produce identical behaviour.
+#
+# Build:
+#   docker build -f Dockerfile.modular -t scrt4-hardened .
+#
+# Run:
+#   docker run -it -v scrt4-vault:/home/scrt/.scrt4 scrt4-hardened shell
+#   docker run -it -v scrt4-vault:/home/scrt/.scrt4 scrt4-hardened status
+#
+# Persistent vault (recommended):
+#   docker run -it \
+#     -v scrt4-vault:/home/scrt/.scrt4 \
+#     -v scrt4-claude:/home/scrt/.claude \
+#     scrt4-hardened shell
+
+# ── Stage 1: Build the Rust daemon ──────────────────────────────────
+FROM rust:latest AS builder
+
+WORKDIR /build/daemon
+COPY daemon/Cargo.toml daemon/Cargo.lock ./
+COPY daemon/src ./src
+
+RUN cargo build --release --bin scrt4-daemon \
+    && strip /build/daemon/target/release/scrt4-daemon \
+    && cargo test --release 2>&1 | tee /build/test-output.txt; \
+    echo $? > /build/test-exit-code
+
+# ── Stage 2: Assemble the v0.2 hardened CLI ─────────────────────────
+FROM debian:trixie-slim AS cli-builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        bash gawk \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+COPY daemon/bin/scrt4-core daemon/bin/scrt4-core
+COPY daemon/bin/scrt4-modules daemon/bin/scrt4-modules
+COPY scripts/build-scrt4.sh scripts/build-scrt4.sh
+COPY modules.manifest modules.manifest
+
+RUN bash scripts/build-scrt4.sh hardened /tmp/scrt4-hardened
+
+# ── Stage 3: Hardened runtime ────────────────────────────────────────
+FROM debian:trixie-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        bash \
+        curl \
+        ca-certificates \
+        jq \
+        socat \
+        python3-minimal \
+        python3-pip \
+        python3-cryptography \
+        magic-wormhole \
+        qrencode \
+        zenity \
+        nodejs \
+        npm \
+    && rm -rf /var/lib/apt/lists/*
+
+# Claude Code CLI
+RUN npm install -g @anthropic-ai/claude-code \
+    && npm cache clean --force
+
+# Non-root user
+RUN useradd -m -s /bin/bash scrt \
+    && mkdir -p /home/scrt/.scrt4 /home/scrt/.claude \
+    && chown -R scrt:scrt /home/scrt
+
+# Shell aliases for Claude Code
+RUN echo "alias oc='claude --dangerously-skip-permissions'" >> /home/scrt/.bashrc \
+    && echo "alias cc='claude --dangerously-skip-permissions --continue'" >> /home/scrt/.bashrc \
+    && chown scrt:scrt /home/scrt/.bashrc
+
+# Daemon binary from Stage 1
+COPY --from=builder /build/daemon/target/release/scrt4-daemon /usr/local/bin/scrt4-daemon
+
+# Test results from Stage 1
+COPY --from=builder /build/test-output.txt /home/scrt/test-output.txt
+COPY --from=builder /build/test-exit-code /home/scrt/test-exit-code
+
+# v0.2 hardened CLI from Stage 2 (modular build)
+COPY --from=cli-builder /tmp/scrt4-hardened /usr/local/bin/scrt4
+RUN chmod +x /usr/local/bin/scrt4 /usr/local/bin/scrt4-daemon
+
+# Runtime directory for Unix socket
+ENV XDG_RUNTIME_DIR=/tmp/scrt4-runtime
+RUN mkdir -p /tmp/scrt4-runtime && chown scrt:scrt /tmp/scrt4-runtime
+
+# Entrypoint script
+RUN printf '%s\n' \
+    '#!/bin/bash' \
+    'set -euo pipefail' \
+    'case "${1:-help}" in' \
+    '    test)' \
+    '        echo "=== Rust test results ==="' \
+    '        cat /home/scrt/test-output.txt' \
+    '        exit_code=$(cat /home/scrt/test-exit-code)' \
+    '        exit "$exit_code"' \
+    '        ;;' \
+    '    bash-check)' \
+    '        echo "=== Bash syntax check ==="' \
+    '        bash -n /usr/local/bin/scrt4' \
+    '        echo "PASS: CLI syntax is valid"' \
+    '        ;;' \
+    '    smoke)' \
+    '        echo "=== Smoke test ==="' \
+    '        scrt4-daemon &' \
+    '        sleep 1' \
+    '        echo "Testing: scrt4 status"' \
+    '        scrt4 status || true' \
+    '        echo "Testing: scrt4 help"' \
+    '        scrt4 help > /dev/null' \
+    '        echo "Testing: scrt4 list-encrypted"' \
+    '        scrt4 list-encrypted || true' \
+    '        echo "Testing: scrt4 critical"' \
+    '        scrt4 critical || true' \
+    '        kill %1 2>/dev/null || true' \
+    '        echo "PASS: Smoke tests completed"' \
+    '        ;;' \
+    '    shell)' \
+    '        exec /bin/bash' \
+    '        ;;' \
+    '    *)' \
+    '        exec scrt4 "$@"' \
+    '        ;;' \
+    'esac' \
+    > /home/scrt/entrypoint.sh \
+    && chmod +x /home/scrt/entrypoint.sh \
+    && chown scrt:scrt /home/scrt/entrypoint.sh
+
+USER scrt
+WORKDIR /home/scrt
+
+# Labels
+LABEL org.opencontainers.image.title="scrt4-hardened"
+LABEL org.opencontainers.image.description="scrt4 v0.2 hardened — modular architecture with FIDO2/WebAuthn"
+LABEL com.scrt4.distribution="hardened"
+LABEL com.scrt4.architecture="v0.2-modular"
+
+# Persistent volumes
+VOLUME /home/scrt/.scrt4
+VOLUME /home/scrt/.claude
+
+ENTRYPOINT ["/home/scrt/entrypoint.sh"]
+CMD ["help"]

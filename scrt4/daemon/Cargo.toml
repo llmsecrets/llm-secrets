@@ -1,0 +1,65 @@
+[package]
+name = "scrt4-daemon"
+version = "0.1.0"
+edition = "2021"
+description = "WebAuthn PRF secret manager daemon"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full", "net", "process", "io-util", "sync"] }
+
+# WebAuthn server
+axum = "0.7"
+webauthn-rs = { version = "0.5", features = ["danger-allow-state-serialisation"] }
+webauthn-rs-proto = "0.5"
+url = "2"
+tower-http = { version = "0.5", features = ["cors"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Crypto (same as scrt3 — reused)
+aes = "0.8"
+cbc = { version = "0.1", features = ["alloc"] }
+aes-gcm = "0.10"
+
+# Utilities
+rand = "0.8"
+base64 = "0.21"
+hex = "0.4"
+dirs = "5"
+regex = "1"
+zeroize = { version = "1", features = ["derive"] }
+libc = "0.2"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+tempfile = "3"
+qrcode = "0.14"
+
+# SHA-256 for stable entry IDs in encrypted_inventory.rs
+sha2 = "0.10"
+
+# Force vendored OpenSSL so cross-compile to aarch64 doesn't need
+# libssl-dev:arm64 on the builder. webauthn-rs pulls in openssl-sys
+# transitively; adding openssl here with the `vendored` feature causes
+# openssl-sys to statically compile OpenSSL from bundled source.
+openssl = { version = "0.10", features = ["vendored"] }
+
+# Migration from scrt3 (optional)
+argon2 = { version = "0.5", optional = true }
+
+[features]
+default = []
+migrate = ["argon2"]
+
+[[bin]]
+name = "scrt4-daemon"
+path = "src/main.rs"
+
+[[bin]]
+name = "scrt4"
+path = "src/cli.rs"
+
+[dev-dependencies]
+tempfile = "3"

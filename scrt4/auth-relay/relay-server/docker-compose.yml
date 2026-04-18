@@ -1,0 +1,21 @@
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --maxmemory 50mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis-data:/data
+
+  relay:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "4100:4100"
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - RELAY_PORT=4100
+    depends_on:
+      - redis
+
+volumes:
+  redis-data:

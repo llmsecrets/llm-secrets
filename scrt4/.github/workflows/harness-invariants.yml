@@ -1,0 +1,56 @@
+name: harness invariants
+
+# Runs the static TCB/auth invariant tests under daemon/tests/. These are
+# pure-function / static-analysis checks — no daemon, no network, no
+# WebAuthn hardware needed. They catch regression classes that have
+# bitten the codebase before (e.g. sending backup_key without first
+# running _wa_gate, uploading non-ciphertext through cloud-crypt).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'daemon/bin/**'
+      - 'daemon/tests/**'
+      - '.github/workflows/harness-invariants.yml'
+  pull_request:
+    paths:
+      - 'daemon/bin/**'
+      - 'daemon/tests/**'
+      - '.github/workflows/harness-invariants.yml'
+  workflow_dispatch:
+
+jobs:
+  invariants:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y jq file
+
+      - name: Run every daemon/tests/test_*.sh
+        shell: bash
+        run: |
+          set -u
+          shopt -s nullglob
+          tests=(daemon/tests/test_*.sh)
+          if [ "${#tests[@]}" -eq 0 ]; then
+            echo "No tests found under daemon/tests/"; exit 1
+          fi
+          fails=0
+          for t in "${tests[@]}"; do
+            echo "::group::$t"
+            if bash "$t"; then
+              echo "::endgroup::"
+            else
+              echo "::endgroup::"
+              echo "::error file=$t::harness test failed"
+              fails=$((fails+1))
+            fi
+          done
+          if [ "$fails" -gt 0 ]; then
+            echo "$fails harness test(s) failed."
+            exit 1
+          fi
+          echo "All harness invariants passed."
