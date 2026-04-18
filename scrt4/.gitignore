@@ -2,6 +2,9 @@
 # Simple Secret - .gitignore
 # ========================================
 
+# Local Claude Code working state (scheduled_tasks.lock, etc.)
+.claude/
+
 # ----------------------------------------
 # Secrets & Encrypted Files
 # NEVER commit these

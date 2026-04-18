@@ -28,6 +28,17 @@ install -m 644 -o www-data -g www-data \
     "$CHECKOUT_DIR/install/scrt4-native.sh" \
     "$WEB_DIR/scrt4-native.sh"
 
+# Checksum file for the native installer — enables two-hosts-one-hash
+# verification: the same bytes and the same hash are also attached to every
+# GitHub release, so `curl install.llmsecrets.com/native.sha256` and
+# `curl github.com/.../releases/<tag>/scrt4-native.sh.sha256` must match.
+# Served at /native.sha256 via a Caddy rewrite.
+if [ -f "$CHECKOUT_DIR/install/scrt4-native.sh.sha256" ]; then
+    install -m 644 -o www-data -g www-data \
+        "$CHECKOUT_DIR/install/scrt4-native.sh.sha256" \
+        "$WEB_DIR/scrt4-native.sh.sha256"
+fi
+
 # macOS zenity shim (osascript-backed). Served at /zenity-macos; the native
 # installer drops it at $INSTALL_DIR/zenity on Darwin hosts.
 install -m 644 -o www-data -g www-data \

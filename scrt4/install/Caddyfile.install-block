@@ -17,6 +17,12 @@ install.llmsecrets.com {
     @native path /native
     rewrite @native /scrt4-native.sh
 
+    # /native.sha256 → checksum of the native installer. Paired with the same
+    # file attached to every GitHub release: two hosts, one hash. Users can
+    # verify the installer matches both sources before piping to sh.
+    @native_sha path /native.sha256
+    rewrite @native_sha /scrt4-native.sh.sha256
+
     # /zenity-macos → osascript-backed zenity shim for macOS. scrt4 view +
     # scrt4 add open native Cocoa dialogs through this instead of gtk+3.
     @zenity path /zenity-macos
