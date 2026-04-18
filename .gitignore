@@ -172,3 +172,8 @@ packages/
 # Rust Build Output
 # ----------------------------------------
 target/
+
+# ----------------------------------------
+# Vercel project link (per-checkout, not source)
+# ----------------------------------------
+.vercel/
