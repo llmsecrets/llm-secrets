@@ -4,7 +4,7 @@
 
 [![Downloads](https://img.shields.io/badge/Downloads-llmsecrets.com-2563eb)](https://llmsecrets.com/downloads)
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-green)](LICENSE)
-[![Branch: scrt4-community](https://img.shields.io/badge/Branch-scrt4--community-blueviolet)](https://github.com/llmsecrets/llm-secrets/tree/scrt4-community)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/llmsecrets/llm-secrets)
 
 ---
 
