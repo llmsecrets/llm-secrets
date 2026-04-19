@@ -21,8 +21,10 @@ Secret values exist ONLY in the subprocess environment. They are never written t
 ## Quick Start
 
 ```bash
-# Install
-./install.sh
+# Install (verify the installer hash first, then run it)
+curl -fsSL https://install.llmsecrets.com/native -o scrt4-native.sh \
+  && sha256sum scrt4-native.sh \
+  && sh scrt4-native.sh
 
 # Setup (registers your passkey/YubiKey — one time only)
 scrt4 setup
@@ -191,6 +193,9 @@ Always run `scrt4 backup-key --save /path/to/USB` after setup and store it safel
 |---------|-----|--------|-------|
 | v0.1.0 | `v0.1.0` | Stable | `joshgottlieb/scrt4-hardened:latest` |
 | v0.2.0 | `architecture/v0.2.0` | Ready | `joshgottlieb/scrt4-hardened:v0.2-modular` |
+| v0.2.14-community | `v0.2.14-community` | Current | Native binaries — see [llmsecrets.com/downloads](https://llmsecrets.com/downloads) |
+
+The current installer resolves the latest tag at runtime from [`install.llmsecrets.com/releases/latest.txt`](https://install.llmsecrets.com/releases/latest.txt); checksums live at `install.llmsecrets.com/releases/<tag>/SHA256SUMS`.
 
 ## License
 
