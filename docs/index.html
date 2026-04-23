@@ -720,20 +720,62 @@
       color: var(--text-secondary);
     }
 
+    /* Mobile docs menu toggle (hidden on desktop) */
+    .docs-menu-btn {
+      display: none;
+    }
+
     /* Responsive */
     @media (max-width: 1024px) {
+      .docs-layout {
+        display: block;
+      }
       .sidebar {
+        position: static;
+        width: auto;
+        height: auto;
+        padding: 1rem 1.5rem;
+        border-right: none;
+        border-bottom: 1px solid var(--border-color);
+        left: 0;
+        top: auto;
         display: none;
+        background: var(--background);
+      }
+      .sidebar.docs-menu-open {
+        display: block;
       }
       .docs-content {
         margin-left: 0;
-        padding: 2rem;
+        padding: 1.5rem 1.25rem 3rem;
+      }
+      .docs-menu-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+        margin: 1rem 1.25rem 0;
+        padding: 0.625rem 1rem;
+        background: var(--light-gray);
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        font-size: 0.9rem;
+        font-weight: 500;
+        color: var(--text-primary);
+        cursor: pointer;
+        min-height: 44px;
+      }
+      .docs-menu-btn[aria-expanded="true"] {
+        background: var(--trust-blue-light);
+        color: var(--trust-blue);
       }
     }
 
     @media (max-width: 640px) {
       .docs-content h1 {
         font-size: 2rem;
+      }
+      .docs-content {
+        padding: 1rem 1rem 2rem;
       }
       .nav-links {
         display: none;
@@ -757,8 +799,13 @@
     </div>
   </nav>
 
+  <button class="docs-menu-btn" id="docsMenuBtn" aria-expanded="false" aria-controls="docsSidebar" aria-label="Toggle documentation menu">
+    <span aria-hidden="true">☰</span>
+    <span>Menu</span>
+  </button>
+
   <div class="docs-layout">
-    <aside class="sidebar">
+    <aside class="sidebar" id="docsSidebar">
       <div class="sidebar-section">
         <div class="sidebar-title">Getting Started</div>
         <ul class="sidebar-links">
@@ -1329,6 +1376,23 @@ session: unlocked (18h 42m remaining)
         }
       });
     });
+
+    // Mobile docs menu toggle
+    (function() {
+      var btn = document.getElementById('docsMenuBtn');
+      var sidebar = document.getElementById('docsSidebar');
+      if (!btn || !sidebar) return;
+      btn.addEventListener('click', function() {
+        var open = sidebar.classList.toggle('docs-menu-open');
+        btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+      });
+      sidebar.addEventListener('click', function(e) {
+        if (e.target.tagName === 'A' && sidebar.classList.contains('docs-menu-open')) {
+          sidebar.classList.remove('docs-menu-open');
+          btn.setAttribute('aria-expanded', 'false');
+        }
+      });
+    })();
   </script>
 </body>
 </html>
