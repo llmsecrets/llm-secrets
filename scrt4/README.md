@@ -51,6 +51,7 @@ scrt4 view
 | `scrt4 status` | Check session status |
 | `scrt4 list [--tags]` | List secret names (with optional tags) |
 | `scrt4 add KEY=value` | Add a secret |
+| `scrt4 import <file>` | Import secrets from a `.env` file |
 | `scrt4 run 'cmd $env[KEY]'` | Run command with secret injection |
 | `scrt4 view` | View/edit secrets in GUI |
 | `scrt4 share` | Share secrets to another machine (wormhole) |
@@ -58,6 +59,7 @@ scrt4 view
 | `scrt4 encrypt-folder <path>` | Encrypt a folder to `.scrt4` archive |
 | `scrt4 decrypt-folder <archive>` | Decrypt a `.scrt4` archive |
 | `scrt4 backup-vault` | Backup encrypted vault to tar.gz |
+| `scrt4 cloud-crypt encrypt-and-push <path>` | Encrypt vault locally and push to your Google Drive |
 | `scrt4 backup-key [--save DIR]` | Show or save master key (requires auth) |
 | `scrt4 recover <backup.json>` | Recover from encrypted master key backup |
 | `scrt4 backup-guide` | Show backup & recovery guide |
