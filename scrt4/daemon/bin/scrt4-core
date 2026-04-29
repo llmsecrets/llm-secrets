@@ -340,6 +340,49 @@ sys.stdout.buffer.write(b''.join(chunks))
 }
 export -f send_request
 
+# ── TTL parsing ──────────────────────────────────────────────────────
+#
+# _parse_ttl INPUT — convert a TTL like "48h", "30m", "2d", "3600s", or a
+# bare integer (seconds) into integer seconds on stdout. Returns 0 on
+# success, 1 on invalid input (with an error on stderr).
+#
+# Accepts: integer >= 1, optionally suffixed with one of:
+#   s  seconds
+#   m  minutes  (× 60)
+#   h  hours    (× 3600)
+#   d  days     (× 86400)
+#
+# A bare integer is treated as seconds (back-compatible with prior
+# behaviour where `scrt4 unlock 7200` meant 7200 seconds). The unit
+# suffixes are the new behaviour: previously, `scrt4 unlock 48h` died
+# inside `jq --argjson` with a JSON parse error because "48h" is not a
+# JSON number. Issue: `jq: error: 48h is not valid JSON text`.
+_parse_ttl() {
+    local input="${1:-}"
+    if [ -z "$input" ]; then
+        echo "scrt4: _parse_ttl: empty TTL" >&2
+        return 1
+    fi
+    # Pure integer → seconds.
+    if [[ "$input" =~ ^[1-9][0-9]*$ ]]; then
+        printf '%s\n' "$input"
+        return 0
+    fi
+    # Number + unit suffix.
+    if [[ "$input" =~ ^([1-9][0-9]*)([smhd])$ ]]; then
+        local n="${BASH_REMATCH[1]}" unit="${BASH_REMATCH[2]}"
+        case "$unit" in
+            s) printf '%s\n' "$n" ;;
+            m) printf '%s\n' "$(( n * 60 ))" ;;
+            h) printf '%s\n' "$(( n * 3600 ))" ;;
+            d) printf '%s\n' "$(( n * 86400 ))" ;;
+        esac
+        return 0
+    fi
+    echo "scrt4: invalid TTL '${input}' — expected integer seconds or N{s,m,h,d} (e.g. 48h, 30m, 2d, 7200)" >&2
+    return 1
+}
+
 # ── WebAuthn flow helpers (ported from v0.1.0 monolith, ISS016) ──────
 #
 # These helpers drive the QR-code + relay polling flow used by cmd_unlock
@@ -841,10 +884,12 @@ CORE COMMANDS:
     status              Check session status
     setup [--agent]     Register a WebAuthn passkey (first-time enrollment)
     unlock [--agent] [ttl] Authenticate and start a session
+                        (ttl: integer seconds or N{s,m,h,d}, e.g. 48h, 30m)
                         (--agent renders the QR in plain ASCII with banner
                          markers so AI coding assistants pass it through
                          unmodified instead of truncating it)
     extend [ttl]        Reset session timer (optionally update TTL)
+                        (ttl: integer seconds or N{s,m,h,d}, e.g. 48h, 30m)
     logout              Lock the session (aliases: lock, clear)
     list [--tags] [--tag T]  List secret names (optionally with tags / filtered)
     add [KEY=value ...] Add secrets (GUI notepad if no args)
@@ -898,7 +943,9 @@ cmd_extend() {
     # even when ttl is null. Sending `{"method":"extend"}` alone fails
     # to deserialize.
     if [ -n "$ttl" ]; then
-        req=$(jq -nc --argjson ttl "$ttl" '{method:"extend",params:{ttl:$ttl}}')
+        local ttl_secs
+        ttl_secs=$(_parse_ttl "$ttl") || return 1
+        req=$(jq -nc --argjson ttl "$ttl_secs" '{method:"extend",params:{ttl:$ttl}}')
     else
         req='{"method":"extend","params":{"ttl":null}}'
     fi
@@ -945,7 +992,10 @@ cmd_unlock() {
         esac
     done
 
-    run_unlock_flow "$ttl"
+    local ttl_secs
+    ttl_secs=$(_parse_ttl "$ttl") || return 1
+
+    run_unlock_flow "$ttl_secs"
 }
 
 # cmd_setup [--cli] — enroll a new WebAuthn credential (passkey).
