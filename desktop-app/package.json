@@ -75,7 +75,7 @@
     "@types/react": "^19.2.8",
     "@types/react-dom": "^19.2.3",
     "electron-squirrel-startup": "^1.0.1",
-    "ethers": "^6.16.0",
+    "ethers": "^6.17.0",
     "keytar": "^7.9.0",
     "react": "^19.2.3",
     "react-dom": "^19.2.3"
