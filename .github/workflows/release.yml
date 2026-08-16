@@ -135,9 +135,55 @@ jobs:
           path: artifacts/scrt4
           if-no-files-found: error
 
+  # Run the built artifacts on the platform they were built for. A command
+  # whose handler no longer exists still parses, still registers, and still
+  # reviews clean — it only fails when someone runs it, which is how `lock`
+  # once shipped as a silent no-op. This is the gate that catches that.
+  #
+  # Only the native pair per runner: an aarch64-linux binary cannot execute
+  # on the x86_64 runner, so cross-built artifacts are checked by the build
+  # succeeding, not by running them.
+  verify:
+    name: verify (${{ matrix.os_label }})
+    needs: [build-daemon, build-cli]
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os_label: linux
+            arch: x86_64
+            runner: ubuntu-latest
+          - os_label: darwin
+            arch: aarch64
+            runner: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Download daemon
+        uses: actions/download-artifact@v4
+        with:
+          name: scrt4-daemon-${{ matrix.os_label }}-${{ matrix.arch }}
+          path: art
+
+      - name: Download CLI
+        uses: actions/download-artifact@v4
+        with:
+          name: scrt4-cli
+          path: art
+
+      - name: Check the artifacts
+        run: |
+          bash scrt4/scripts/check-release-artifacts.sh \
+            art/scrt4-daemon-${{ matrix.os_label }}-${{ matrix.arch }} \
+            art/scrt4
+
   bundle:
     name: bundle + checksums
-    needs: [build-daemon, build-cli]
+    needs: [build-daemon, build-cli, verify]
     runs-on: ubuntu-latest
     steps:
       - name: Download all artifacts
