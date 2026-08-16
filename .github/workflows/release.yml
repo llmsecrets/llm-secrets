@@ -1,0 +1,215 @@
+name: Release native binaries
+
+# Builds the scrt4-daemon Rust binary for each supported OS/arch pair plus the
+# assembled bash CLI, and emits them as one workflow artifact with a
+# SHA256SUMS file the native installer verifies against.
+#
+# It deliberately does NOT create a GitHub Release. Distribution is served
+# from the llmsecrets domain; this repository is source and CI only. The
+# bundle produced here is what gets published to that host.
+#
+# macOS is the reason this exists at all: a darwin binary cannot be
+# cross-compiled from the machines we build Windows on, so it needs a macOS
+# runner.
+#
+# Artifacts:
+#   scrt4-daemon-linux-x86_64
+#   scrt4-daemon-linux-aarch64
+#   scrt4-daemon-darwin-aarch64   Apple Silicon; Intel Macs run it under Rosetta 2
+#   scrt4                         the core-only bash CLI
+#   SHA256SUMS
+#
+# Windows is released separately as a bundled zip and is not built here.
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to (re)build artifacts for'
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-daemon:
+    name: daemon (${{ matrix.os_label }}/${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os_label: linux
+            arch: x86_64
+            runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            cross: false
+          - os_label: linux
+            arch: aarch64
+            runner: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            cross: true
+          - os_label: darwin
+            arch: aarch64
+            runner: macos-latest
+            target: aarch64-apple-darwin
+            cross: false
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross-compilation deps (linux/aarch64)
+        if: matrix.cross == true
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+          mkdir -p scrt4/daemon/.cargo
+          cat >> scrt4/daemon/.cargo/config.toml <<'EOF'
+          [target.aarch64-unknown-linux-gnu]
+          linker = "aarch64-linux-gnu-gcc"
+          EOF
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            scrt4/daemon/target
+          key: cargo-${{ matrix.target }}-${{ hashFiles('scrt4/daemon/Cargo.lock') }}
+
+      - name: Build daemon (release, ${{ matrix.target }})
+        working-directory: scrt4/daemon
+        run: cargo build --release --locked --bin scrt4-daemon --target ${{ matrix.target }}
+
+      - name: Rename artifact
+        run: |
+          mkdir -p artifacts
+          cp scrt4/daemon/target/${{ matrix.target }}/release/scrt4-daemon \
+             artifacts/scrt4-daemon-${{ matrix.os_label }}-${{ matrix.arch }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: scrt4-daemon-${{ matrix.os_label }}-${{ matrix.arch }}
+          path: artifacts/scrt4-daemon-${{ matrix.os_label }}-${{ matrix.arch }}
+          if-no-files-found: error
+
+  build-cli:
+    name: cli (core-only)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Assemble the scrt4 CLI
+        # core-only is the distribution this repository ships: the vault core
+        # with no modules. Stamping SCRT4_VERSION from the tag keeps
+        # `scrt4 --version` from reporting the in-repo -dev placeholder.
+        env:
+          SCRT4_VERSION: ${{ github.event.inputs.tag || github.ref_name }}
+        working-directory: scrt4
+        run: |
+          mkdir -p ../artifacts
+          bash scripts/build-scrt4.sh core-only ../artifacts/scrt4
+          bash -n ../artifacts/scrt4
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: scrt4-cli
+          path: artifacts/scrt4
+          if-no-files-found: error
+
+  # Run the built artifacts on the platform they were built for. A command
+  # whose handler no longer exists still parses, still registers, and still
+  # reviews clean — it only fails when someone runs it, which is how `lock`
+  # once shipped as a silent no-op. This is the gate that catches that.
+  #
+  # Only the native pair per runner: an aarch64-linux binary cannot execute
+  # on the x86_64 runner, so cross-built artifacts are checked by the build
+  # succeeding, not by running them.
+  verify:
+    name: verify (${{ matrix.os_label }})
+    needs: [build-daemon, build-cli]
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os_label: linux
+            arch: x86_64
+            runner: ubuntu-latest
+          - os_label: darwin
+            arch: aarch64
+            runner: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Download daemon
+        uses: actions/download-artifact@v4
+        with:
+          name: scrt4-daemon-${{ matrix.os_label }}-${{ matrix.arch }}
+          path: art
+
+      - name: Download CLI
+        uses: actions/download-artifact@v4
+        with:
+          name: scrt4-cli
+          path: art
+
+      - name: Check the artifacts
+        run: |
+          bash scrt4/scripts/check-release-artifacts.sh \
+            art/scrt4-daemon-${{ matrix.os_label }}-${{ matrix.arch }} \
+            art/scrt4
+
+  bundle:
+    name: bundle + checksums
+    needs: [build-daemon, build-cli, verify]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Flatten and checksum
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          # download-artifact nests each artifact in a directory of its own
+          # name, so flatten before hashing — otherwise SHA256SUMS records
+          # paths the installer will never look for.
+          find dist -type f -exec cp {} out/ \;
+          chmod +x out/scrt4-daemon-* out/scrt4
+          cd out
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+
+      # Distribution is served from the llmsecrets domain, not from here.
+      # This job's only output is a verified artifact set to publish there;
+      # it deliberately does not create a GitHub Release.
+      - name: Upload the release bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: scrt4-${{ github.event.inputs.tag || github.ref_name }}-unix
+          path: out/
+          if-no-files-found: error
