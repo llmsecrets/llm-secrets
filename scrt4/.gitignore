@@ -131,11 +131,6 @@ webhook-server/
 .env.encrypted.v*
 
 # ----------------------------------------
-# scrt4 (FIDO2 - in development)
-# ----------------------------------------
-scrt4/
-
-# ----------------------------------------
 # Internal Security Notes (private)
 # ----------------------------------------
 SECURITY-INTERNAL.md
