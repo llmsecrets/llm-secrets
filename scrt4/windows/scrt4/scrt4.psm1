@@ -902,18 +902,38 @@ function Invoke-CmdAdd {
     return 1
 }
 
+# scrt4 run [--cwd DIR] 'cmd $env[KEY]'
+#
+# Runs in the caller's directory by default; --cwd overrides it.
 function Invoke-CmdRun {
     param([string[]]$Rest)
 
     if (-not (Test-Scrt4Unlocked)) { return 1 }
+
+    $cwd = (Get-Location).Path
+    while ($Rest.Count -gt 0) {
+        if ($Rest[0] -eq '--cwd') {
+            if ($Rest.Count -lt 2) { Write-Err 'scrt4 run: --cwd needs a directory'; return 1 }
+            $cwd = $Rest[1]; $Rest = $Rest[2..($Rest.Count - 1)]
+        } elseif ($Rest[0] -like '--cwd=*') {
+            $cwd = $Rest[0].Substring(6); $Rest = @($Rest[1..($Rest.Count - 1)])
+        } else { break }
+    }
     if ($Rest.Count -eq 0) {
-        Write-Err 'Usage: scrt4 run ''cmd $env[KEY]'''
+        Write-Err 'Usage: scrt4 run [--cwd DIR] ''cmd $env[KEY]'''
+        return 1
+    }
+    if (-not (Test-Path -LiteralPath $cwd -PathType Container)) {
+        Write-Err "scrt4 run: no such directory: $cwd"
         return 1
     }
     $cmd = $Rest -join ' '
 
+    # working_dir matters: the daemon is a long-lived process whose own cwd is
+    # wherever it was started, so without this every relative path in the
+    # command resolves against that instead of the caller's directory.
     $resp = $null
-    try { $resp = Send-Scrt4Request @{ method = 'run'; params = @{ command = $cmd } } } catch {
+    try { $resp = Send-Scrt4Request @{ method = 'run'; params = @{ command = $cmd; working_dir = $cwd } } } catch {
         Write-Err "scrt4 run failed: $($_.Exception.Message)"
         return 1
     }
@@ -1327,7 +1347,9 @@ CORE COMMANDS:
     logout              Lock the session (aliases: lock, clear)
     list [--tags] [--tag T]  List secret names (optionally with tags / filtered)
     add [KEY=value ...] Add secrets (GUI notepad if no args)
-    run 'cmd $env[K]'   Run a command with secret injection (cmd.exe syntax)
+    run [--cwd DIR] 'cmd $env[K]'
+                        Run a command with secret injection (cmd.exe syntax).
+                        Runs in the current directory unless --cwd is given.
     view [--cli]        View secrets (GUI default, --cli for terminal)
     backup-vault [--local DIR]   Archive the vault directory (tar.gz)
     backup-key [--save DIR]      Show or save the master key

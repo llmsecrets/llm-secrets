@@ -177,3 +177,10 @@ target/
 # Vercel project link (per-checkout, not source)
 # ----------------------------------------
 .vercel/
+
+# Local AI-assistant working instructions. These are per-developer notes, not
+# project documentation, and must never be published from here.
+CLAUDE.local.md
+**/CLAUDE.local.md
+.claude/
+**/.claude/

@@ -804,9 +804,14 @@ _wa_gate() {
 #                 command string with $env[NAME] placeholders intact.
 _run_with_injected_secrets() {
     local cmd="$1"
+    local cwd="${2:-$PWD}"
     local response
     # Daemon protocol: Run takes `command` (not `cmd`). See daemon/src/protocol.rs.
-    response=$(send_request "$(jq -nc --arg c "$cmd" '{method:"run",params:{command:$c}}')" 2>/dev/null || true)
+    #
+    # working_dir matters: the daemon is a long-lived process whose own cwd is
+    # wherever it was started — often / — so without this every relative path
+    # in the command resolves against that instead of the caller's directory.
+    response=$(send_request "$(jq -nc --arg c "$cmd" --arg d "$cwd" '{method:"run",params:{command:$c,working_dir:$d}}')" 2>/dev/null || true)
     local ok
     ok=$(echo "$response" | jq -r '.success // false' 2>/dev/null || echo "false")
     if [ "$ok" != "true" ]; then
@@ -848,7 +853,9 @@ CORE COMMANDS:
     logout              Lock the session (aliases: lock, clear)
     list [--tags] [--tag T]  List secret names (optionally with tags / filtered)
     add [KEY=value ...] Add secrets (GUI notepad if no args)
-    run 'cmd $env[K]'   Run a command with secret injection
+    run [--cwd DIR] 'cmd $env[K]'
+                        Run a command with secret injection. Runs in the
+                        current directory unless --cwd is given.
     view [--cli]        View secrets (GUI default, --cli for terminal)
     rotate              Rotate the vault master key (re-encrypts all secrets)
     share [--all] [NAME ...]     Share secrets via Magic Wormhole
@@ -2492,14 +2499,32 @@ print(json.dumps(secrets), end="")
 # cmd_run 'CMD' — runs a command with $env[NAME] substitution.
 # This is one of the most security-sensitive paths; the substitution
 # itself happens daemon-side (see TCB note on _run_with_injected_secrets).
+# cmd_run [--cwd DIR] 'cmd $env[KEY]'
+#
+# Runs in the caller's directory by default; --cwd overrides it.
 cmd_run() {
     ensure_unlocked || return 1
+    local cwd="$PWD"
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --cwd)
+                [ $# -ge 2 ] || { echo "scrt4 run: --cwd needs a directory" >&2; return 1; }
+                cwd="$2"; shift 2 ;;
+            --cwd=*)
+                cwd="${1#--cwd=}"; shift ;;
+            *) break ;;
+        esac
+    done
     if [ $# -eq 0 ]; then
-        echo "Usage: scrt4 run 'cmd \$env[KEY]'" >&2
+        echo "Usage: scrt4 run [--cwd DIR] 'cmd \$env[KEY]'" >&2
+        return 1
+    fi
+    if [ ! -d "$cwd" ]; then
+        echo "scrt4 run: no such directory: $cwd" >&2
         return 1
     fi
     local cmd="$*"
-    _run_with_injected_secrets "$cmd"
+    _run_with_injected_secrets "$cmd" "$cwd"
 }
 
 # cmd_view [--cli] — view secret values.
