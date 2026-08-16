@@ -5,7 +5,6 @@
 #   scripts/build-scrt4.sh DISTRIBUTION OUTPUT_PATH
 #
 # Examples:
-#   scripts/build-scrt4.sh hardened   /tmp/scrt4-hardened-v2
 #   scripts/build-scrt4.sh core-only  /tmp/scrt4-core-only
 #
 # Env:
@@ -47,7 +46,6 @@ $(awk '/^\[/ { gsub(/[\[\]]/, ""); printf "  - %s\n", $0 }' "$MANIFEST_FILE" 2>/
 OUTPUT_PATH is where to write the assembled scrt4 binary.
 
 Example:
-  $0 hardened   /tmp/scrt4-hardened-v2
   $0 core-only  /tmp/scrt4-core-only
 EOF
     exit 1

@@ -71,7 +71,6 @@ scrt4/                              ← repo root
 │       ├── index.js                Node.js relay — Redis-backed blob store, port 4100
 │       ├── package.json            Dependencies (express, ioredis)
 │       ├── Dockerfile              Node.js container
-│       └── docker-compose.yml      Redis 7 Alpine + Node.js relay
 │
 └── legal/                          License terms
 ```

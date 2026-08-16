@@ -1360,7 +1360,7 @@ function Invoke-CmdBackupGuide {
               SCRT4 -- BACKUP & RECOVERY GUIDE
 =====================================================================
 
-Full guide: https://github.com/VestedJosh/scrt4/blob/main/docs/ONBOARDING-HARDENED.md
+Full guide: https://github.com/llmsecrets/llm-secrets/blob/main/BUILD.md
 
 HOW SCRT4 AUTHENTICATION WORKS:
 
@@ -1413,7 +1413,6 @@ function Show-Scrt4DevBanner {
     Write-Host '========================================================' -ForegroundColor Yellow
     Write-Host '  scrt4-dev -- DEV MODE -- ZERO AUTH' -ForegroundColor Yellow
     Write-Host '  Do NOT store real secrets in this distribution.' -ForegroundColor Yellow
-    Write-Host '  See: https://github.com/VestedJosh/scrt4/issues/59' -ForegroundColor Yellow
     Write-Host '========================================================' -ForegroundColor Yellow
     Write-Host ''
 }

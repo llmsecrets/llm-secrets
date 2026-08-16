@@ -37,7 +37,7 @@
 #   SCRT4_INSTALL_DIR=/path/to/bin  Override install directory
 #   SCRT4_SKIP_SERVICE=1            Install binaries only; skip systemd/launchd
 #   SCRT4_SKIP_DEPS=1               Don't apt-get/brew/dnf install jq+zenity
-#   SCRT4_REPO=owner/repo           Repo slug for error/issue links (default: VestedJosh/scrt4)
+#   SCRT4_REPO=owner/repo           Repo slug for error/issue links (default: llmsecrets/llm-secrets)
 #   SCRT4_RELEASE_BASE_URL=https:// Override release-artifact host (default:
 #                                   https://install.llmsecrets.com/releases)
 #   SCRT4_MODULES=a,b,c             Equivalent to --module a --module b --module c
@@ -53,7 +53,7 @@
 main() {
     set -eu
 
-    REPO="${SCRT4_REPO:-VestedJosh/scrt4}"
+    REPO="${SCRT4_REPO:-llmsecrets/llm-secrets}"
     VERSION="${SCRT4_VERSION:-latest}"
     SKIP_SERVICE="${SCRT4_SKIP_SERVICE:-0}"
     RELEASE_BASE_URL="${SCRT4_RELEASE_BASE_URL:-https://install.llmsecrets.com/releases}"
