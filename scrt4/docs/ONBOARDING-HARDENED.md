@@ -322,8 +322,7 @@ The agent writes `scrt4 run 'forge script ... --private-key $env[PRIVATE_KEY]'` 
 
 ## Links
 
-- **Project:** [github.com/VestedJosh/scrt4](https://github.com/VestedJosh/scrt4)
-- **This release:** [v0.1.0](https://github.com/VestedJosh/scrt4/releases/tag/v0.1.0)
+- **Project:** [github.com/llmsecrets/llm-secrets](https://github.com/llmsecrets/llm-secrets)
 - **Image:** `joshgottlieb/scrt4-hardened:0.1.0`
 - **Install URL:** [install.llmsecrets.com](https://install.llmsecrets.com)
 - **Release & publishing process:** [docs/RELEASE.md](RELEASE.md)

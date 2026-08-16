@@ -91,7 +91,6 @@ COPY daemon/bin/scrt4 /usr/local/bin/scrt4
 # tmpfs temp-file shredding. All security gates (ensure_unlocked,
 # reveal_all bulk-reveal WebAuthn challenge) run regardless of fg/bg.
 #
-# Ref: https://github.com/VestedJosh/scrt4/issues/30
 #
 # NOT yet applied to Dockerfile.hardened-v2 — see daemon/TODO.md under
 # "Hardened-v2 formal-verification backlog". v2 must re-verify before

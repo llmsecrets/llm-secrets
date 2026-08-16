@@ -4,7 +4,7 @@
 
 scrt4 encrypts environment secrets with AES-256-GCM and gates access behind FIDO2 WebAuthn PRF. AI coding assistants can *use* your secrets (via `$env[NAME]` injection) without ever *seeing* them.
 
-[![WSL/Linux](https://img.shields.io/badge/WSL-Linux-FCC624?logo=linux)](https://github.com/VestedJosh/scrt4)
+[![WSL/Linux](https://img.shields.io/badge/WSL-Linux-FCC624?logo=linux)](https://github.com/llmsecrets/llm-secrets)
 [![License: Source Available](https://img.shields.io/badge/License-Source%20Available-green)](LICENSE)
 
 ## How It Works
