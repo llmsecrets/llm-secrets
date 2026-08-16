@@ -819,9 +819,6 @@
         <div class="sidebar-title">Guides</div>
         <ul class="sidebar-links">
           <li><a href="#claude-code">With Claude Code</a></li>
-          <li><a href="#import-env">Import .env files</a></li>
-          <li><a href="#cloud-crypt">Encrypted Drive backup</a></li>
-          <li><a href="#encrypt-folder">Encrypt a folder</a></li>
           <li><a href="#recovery">Recovery</a></li>
         </ul>
       </div>
@@ -838,7 +835,6 @@
         <div class="sidebar-title">Reference</div>
         <ul class="sidebar-links">
           <li><a href="#commands">Commands</a></li>
-          <li><a href="#modules">Modules</a></li>
           <li><a href="#verify">Trust &amp; verification</a></li>
           <li><a href="#uninstall">Uninstall</a></li>
           <li><a href="#troubleshooting">Troubleshooting</a></li>
@@ -879,17 +875,36 @@
 
       <h2 id="install">Install</h2>
 
-      <p>One command. Auto-detects OS and architecture, pulls SHA256-verified binaries from GitHub Releases, and installs a systemd user unit (Linux) or launchd plist (macOS). No Docker required.</p>
+      <p>One command. Auto-detects OS and architecture, pulls SHA256-verified binaries from GitHub Releases, and installs a systemd user unit (Linux) or launchd plist (macOS). Windows has its own installer below. No Docker required.</p>
+
+      <h3>Linux and macOS</h3>
 
       <div class="terminal-window">
         <div class="terminal-header">
           <span class="terminal-dot terminal-dot-red"></span>
           <span class="terminal-dot terminal-dot-yellow"></span>
           <span class="terminal-dot terminal-dot-green"></span>
-          <span class="terminal-title">install</span>
+          <span class="terminal-title">install &mdash; Linux / macOS</span>
         </div>
         <div class="terminal-body">
 <span class="prompt">$</span> <span class="cmd">curl -fsSL https://install.llmsecrets.com/native | sh</span>
+        </div>
+      </div>
+
+      <h3>Windows</h3>
+
+      <p>PowerShell 5.1 or later. Installs to your user profile, registers the
+      named-pipe daemon, and upgrades in place later with <code>scrt4 upgrade</code>.</p>
+
+      <div class="terminal-window">
+        <div class="terminal-header">
+          <span class="terminal-dot terminal-dot-red"></span>
+          <span class="terminal-dot terminal-dot-yellow"></span>
+          <span class="terminal-dot terminal-dot-green"></span>
+          <span class="terminal-title">install &mdash; Windows</span>
+        </div>
+        <div class="terminal-body">
+<span class="prompt">PS&gt;</span> <span class="cmd">irm https://dl.llmsecrets.com/scrt4 | iex</span>
         </div>
       </div>
 
@@ -943,7 +958,7 @@
 
       <div class="callout callout-warning">
         <div class="callout-title">Back it up before you add anything</div>
-        <p>Losing the hardware authenticator without a backup = losing the vault. Jump to <a href="#cloud-crypt">Encrypted Drive backup</a> or <a href="#recovery">Recovery</a> before you store anything important.</p>
+        <p>Losing the hardware authenticator without a backup = losing the vault. Jump to <a href="#recovery">Recovery</a> before you store anything important.</p>
       </div>
 
       <h2 id="first-secret">Your first secret</h2>
@@ -1038,146 +1053,6 @@ session: unlocked (18h 42m remaining)
         </div>
       </div>
 
-      <h2 id="import-env">Importing existing .env files</h2>
-
-      <p>If you already have project <code>.env</code> files on disk, their secrets belong in scrt4, not in plaintext. The <code>import</code> module parses <code>export KEY=value</code> forms, surrounding quotes, and <code>#</code> comments.</p>
-
-      <div class="terminal-window">
-        <div class="terminal-header">
-          <span class="terminal-dot terminal-dot-red"></span>
-          <span class="terminal-dot terminal-dot-yellow"></span>
-          <span class="terminal-dot terminal-dot-green"></span>
-          <span class="terminal-title">import</span>
-        </div>
-        <div class="terminal-body">
-<span class="prompt">$</span> <span class="cmd">scrt4 import path/to/.env</span>
-<span class="success">✓ imported 7 secrets from path/to/.env</span>
-        </div>
-      </div>
-
-      <p>After import, delete the plaintext file — some tooling still reads <code>.env</code> directly, so confirm your app uses the new injection flow before removing it. A Claude Code session with scrt4 unlocked can help find <code>.env</code> files under your project directories with <code>find ~/projects -name '.env' 2>/dev/null</code> and walk through them one at a time.</p>
-
-      <h2 id="cloud-crypt">Encrypted Google Drive backup (cloud-crypt)</h2>
-
-      <div class="callout callout-warning">
-        <div class="callout-title">Why this matters</div>
-        <p>No authenticator + no backup = no recovery, by design. There is no server-side reset because there is no server-side anything. The recommended backup path is client-side encrypted upload to <strong>your own</strong> Google Drive: AES-256-GCM runs locally before upload, so Drive only ever receives <code>.scrt4</code> ciphertext. Google cannot decrypt it.</p>
-      </div>
-
-      <p>The <code>cloud-crypt</code> module ships with the native installer by default. Setup has three steps: Drive-scoped OAuth, save the master key, push the vault.</p>
-
-      <h3>1. Give cloud-crypt Drive access</h3>
-
-      <p>Three setup paths — pick whichever matches what you already have:</p>
-
-      <div class="cmd-grid">
-        <div class="cmd-card">
-          <code>scrt4 cloud-crypt auth setup --from-gws</code>
-          <span>Runs the Google Workspace CLI (<code>gws</code>) consent flow. Easiest if you don't already have an OAuth blob.</span>
-        </div>
-        <div class="cmd-card">
-          <code>scrt4 cloud-crypt auth setup --from-secret personal_google_workspace</code>
-          <span>Reuses an OAuth blob already in the vault. Nothing is copied — cloud-crypt reads it through the daemon.</span>
-        </div>
-        <div class="cmd-card">
-          <code>scrt4 cloud-crypt auth setup --paste</code>
-          <span>Interactive paste of an existing OAuth blob. For users who manage their own Google OAuth.</span>
-        </div>
-      </div>
-
-      <div class="terminal-window">
-        <div class="terminal-header">
-          <span class="terminal-dot terminal-dot-red"></span>
-          <span class="terminal-dot terminal-dot-yellow"></span>
-          <span class="terminal-dot terminal-dot-green"></span>
-          <span class="terminal-title">verify</span>
-        </div>
-        <div class="terminal-body">
-<span class="prompt">$</span> <span class="cmd">scrt4 cloud-crypt auth status</span>
-<span class="success">active source: vault secret SCRT4_GDRIVE_OAUTH</span>
-<span class="output">scope: drive.file (cloud-crypt can only touch files it creates)</span>
-        </div>
-      </div>
-
-      <h3>2. Save your master key somewhere durable</h3>
-
-      <p>The Drive ciphertext is useless without the master key. Save it password-protected to a USB stick, a password manager, or both.</p>
-
-      <div class="terminal-window">
-        <div class="terminal-header">
-          <span class="terminal-dot terminal-dot-red"></span>
-          <span class="terminal-dot terminal-dot-yellow"></span>
-          <span class="terminal-dot terminal-dot-green"></span>
-          <span class="terminal-title">backup-key</span>
-        </div>
-        <div class="terminal-body">
-<span class="prompt">$</span> <span class="cmd">scrt4 backup-key --save /media/usb</span>
-<span class="success">✓ wrote /media/usb/scrt4-backup-YYYY-MM-DD.enc</span>
-<span class="output">(password-protected; store this file, not the raw key)</span>
-        </div>
-      </div>
-
-      <div class="callout callout-warning">
-        <div class="callout-title">Don't leave it on the desktop</div>
-        <p>Move the exported backup file to a location you actually trust — a hardware key, a USB stick, or your password manager's attachment slot. Desktop = convenient for you = convenient for anything else that can read your disk.</p>
-      </div>
-
-      <h3>3. Push the encrypted vault to Drive</h3>
-
-      <div class="terminal-window">
-        <div class="terminal-header">
-          <span class="terminal-dot terminal-dot-red"></span>
-          <span class="terminal-dot terminal-dot-yellow"></span>
-          <span class="terminal-dot terminal-dot-green"></span>
-          <span class="terminal-title">encrypt-and-push</span>
-        </div>
-        <div class="terminal-body">
-<span class="prompt">$</span> <span class="cmd">scrt4 cloud-crypt encrypt-and-push ~/.scrt4/vault.enc</span>
-<span class="output">encrypting locally with AES-256-GCM...</span>
-<span class="output">uploading to Drive folder 'claude-crypt'...</span>
-<span class="success">✓ pushed vault.enc.scrt4 (driveId: 1AbC...)</span>
-<span class="prompt">$</span> <span class="cmd">scrt4 cloud-crypt list</span>
-<span class="output">vault.enc.scrt4   2.4 KB   1AbC...</span>
-        </div>
-      </div>
-
-      <p>Everything encrypted by cloud-crypt lives in a single Drive folder named <code>claude-crypt</code>, auto-created on first push. You can rename or move the folder later — the module tracks archives by ID, not path. Filenames and sizes are not encrypted.</p>
-
-      <h3>4. Restore on a new machine</h3>
-
-      <ol style="padding-left:1.5rem; margin-bottom:1rem; color:var(--text-secondary); font-size:0.95rem;">
-        <li>Install scrt4 on the new machine (<code>curl -fsSL https://install.llmsecrets.com/native | sh</code>).</li>
-        <li>Run <code>scrt4 setup</code> to enroll a new authenticator.</li>
-        <li>Unlock, then run <code>scrt4 recover /path/to/backup-file.enc</code> — this restores the original master key from the password-protected export you saved in step 2.</li>
-        <li>Authenticate cloud-crypt (<code>scrt4 cloud-crypt auth setup ...</code>) and <code>scrt4 cloud-crypt pull-and-decrypt &lt;driveId&gt;</code> to pull the encrypted vault back down and decrypt it.</li>
-      </ol>
-
-      <div class="callout callout-info">
-        <div class="callout-title">cloud-crypt command reference</div>
-        <p><code>list</code>, <code>where</code>, <code>status</code>, <code>push</code>, <code>pull</code>, <code>encrypt-and-push</code>, <code>pull-and-decrypt</code>, <code>auth setup/status/guide</code>, <code>ui</code> — run <code>scrt4 cloud-crypt help</code> for the full surface area. Every read command supports <code>--json</code> for script consumption.</p>
-      </div>
-
-      <h2 id="encrypt-folder">Encrypt a folder</h2>
-
-      <p>The <code>encrypt-folder</code> module produces a standalone <code>.scrt4</code> archive using the same vault key. Useful for backing up source trees, ops notebooks, or anything else you'd rather not leave in plaintext.</p>
-
-      <div class="terminal-window">
-        <div class="terminal-header">
-          <span class="terminal-dot terminal-dot-red"></span>
-          <span class="terminal-dot terminal-dot-yellow"></span>
-          <span class="terminal-dot terminal-dot-green"></span>
-          <span class="terminal-title">encrypt-folder</span>
-        </div>
-        <div class="terminal-body">
-<span class="prompt">$</span> <span class="cmd">scrt4 encrypt-folder ~/notes</span>
-<span class="success">✓ wrote ~/notes.scrt4</span>
-<span class="prompt">$</span> <span class="cmd">scrt4 decrypt-folder ~/notes.scrt4</span>
-<span class="success">✓ restored ~/notes</span>
-        </div>
-      </div>
-
-      <p>Pair with <code>cloud-crypt push ~/notes.scrt4</code> to ship the archive to Drive without a second round of encryption — the archive is already ciphertext.</p>
-
       <h2 id="recovery">Recovery</h2>
 
       <p>Three recovery paths, in order of preference:</p>
@@ -1261,7 +1136,6 @@ session: unlocked (18h 42m remaining)
         <div class="cmd-card"><code>scrt4 logout</code><span>Lock the session</span></div>
         <div class="cmd-card"><code>scrt4 list [--tags]</code><span>List secret names</span></div>
         <div class="cmd-card"><code>scrt4 add K=v</code><span>Add secrets</span></div>
-        <div class="cmd-card"><code>scrt4 import FILE</code><span>Import an existing .env</span></div>
         <div class="cmd-card"><code>scrt4 view [--cli]</code><span>View/edit in GUI (or terminal)</span></div>
         <div class="cmd-card"><code>scrt4 run 'cmd $env[K]'</code><span>Run with secret injection</span></div>
         <div class="cmd-card"><code>scrt4 rotate</code><span>Rotate the vault master key</span></div>
@@ -1269,32 +1143,12 @@ session: unlocked (18h 42m remaining)
         <div class="cmd-card"><code>scrt4 backup-key --save DIR</code><span>Export password-protected master key</span></div>
         <div class="cmd-card"><code>scrt4 recover FILE</code><span>Restore from an encrypted backup</span></div>
         <div class="cmd-card"><code>scrt4 recover-key KEY</code><span>Emergency restore from raw key</span></div>
-        <div class="cmd-card"><code>scrt4 share [--all] [NAME...]</code><span>Share secrets via Magic Wormhole</span></div>
-        <div class="cmd-card"><code>scrt4 receive [--code CODE]</code><span>Receive shared secrets</span></div>
         <div class="cmd-card"><code>scrt4 verify-self</code><span>Check binary against published SHA256SUMS</span></div>
         <div class="cmd-card"><code>scrt4 llm [--json]</code><span>Emit capability dump for AI agents</span></div>
         <div class="cmd-card"><code>scrt4 help</code><span>Full command reference</span></div>
       </div>
 
       <p>Run <code>scrt4 help</code> locally for the canonical list — this page drifts, the binary doesn't.</p>
-
-      <h2 id="modules">Modules</h2>
-
-      <p>Modules extend scrt4 without expanding the trusted computing base. The native installer ships three by default; the rest are explicit opt-in via <code>--module NAME</code>.</p>
-
-      <table>
-        <thead>
-          <tr><th>Module</th><th>Default?</th><th>What it does</th></tr>
-        </thead>
-        <tbody>
-          <tr><td><code>cloud-crypt</code></td><td>✅</td><td>Client-side encrypted Google Drive backup. AES-256-GCM runs locally before upload.</td></tr>
-          <tr><td><code>encrypt-folder</code></td><td>✅</td><td>Encrypt any directory to a standalone <code>.scrt4</code> archive using the vault key.</td></tr>
-          <tr><td><code>import-env</code></td><td>✅</td><td>Parse an existing <code>.env</code> (including <code>export K=v</code>, quoted values, <code>#</code> comments) into the vault.</td></tr>
-          <tr><td><code>github</code>, <code>gcp</code>, <code>stripe</code>, <code>dns</code>, ...</td><td>Opt-in</td><td>Whitelisted in <a href="https://github.com/llmsecrets/llm-secrets/blob/main/scrt4/install/modules-whitelist.json" target="_blank">modules-whitelist.json</a> and SHA256-verified at install time.</td></tr>
-        </tbody>
-      </table>
-
-      <p>Run <code>scrt4 modules list</code> to see what's loaded in your install.</p>
 
       <h2 id="verify">Trust &amp; verification</h2>
 
@@ -1313,12 +1167,14 @@ session: unlocked (18h 42m remaining)
 
       <h2 id="uninstall">Uninstall</h2>
 
+      <h3>Linux and macOS</h3>
+
       <div class="terminal-window">
         <div class="terminal-header">
           <span class="terminal-dot terminal-dot-red"></span>
           <span class="terminal-dot terminal-dot-yellow"></span>
           <span class="terminal-dot terminal-dot-green"></span>
-          <span class="terminal-title">uninstall</span>
+          <span class="terminal-title">uninstall &mdash; Linux / macOS</span>
         </div>
         <div class="terminal-body">
 <span class="prompt">$</span> <span class="cmd">curl -fsSL https://install.llmsecrets.com/uninstall | sh</span>
@@ -1326,6 +1182,32 @@ session: unlocked (18h 42m remaining)
       </div>
 
       <p>Removes the daemon, CLI, and session data. The encrypted vault at <code>~/.scrt4/</code> stays on disk until you delete it — that's deliberate, so a reinstall can pick up where the old one left off.</p>
+
+      <h3>Windows</h3>
+
+      <p>No single command yet. The installer does three things, and this undoes
+      them in reverse:</p>
+
+      <div class="terminal-window">
+        <div class="terminal-header">
+          <span class="terminal-dot terminal-dot-red"></span>
+          <span class="terminal-dot terminal-dot-yellow"></span>
+          <span class="terminal-dot terminal-dot-green"></span>
+          <span class="terminal-title">uninstall &mdash; Windows</span>
+        </div>
+        <div class="terminal-body">
+<span class="prompt">PS&gt;</span> <span class="cmd">Stop-Process -Name scrt4-daemon -Force -ErrorAction SilentlyContinue</span>
+<span class="prompt">PS&gt;</span> <span class="cmd">Remove-Item -Recurse -Force "$env:LOCALAPPDATA\scrt4"</span>
+<span class="prompt">PS&gt;</span> <span class="cmd">$p = [Environment]::GetEnvironmentVariable('Path','User')</span>
+<span class="prompt">PS&gt;</span> <span class="cmd">$kept = $p.Split(';') | Where-Object { $_ -and $_.TrimEnd('\') -ine "$env:LOCALAPPDATA\scrt4" }</span>
+<span class="prompt">PS&gt;</span> <span class="cmd">[Environment]::SetEnvironmentVariable('Path', ($kept -join ';'), 'User')</span>
+        </div>
+      </div>
+
+      <p>Read the last two lines before running them — they rewrite your user
+      <code>PATH</code>, and it is worth checking <code>$kept</code> looks right
+      first. As on Unix, the vault at <code>%USERPROFILE%\.scrt4\</code> is left
+      alone; delete it separately if you mean to.</p>
 
       <h2 id="troubleshooting">Troubleshooting</h2>
 
@@ -1342,7 +1224,7 @@ session: unlocked (18h 42m remaining)
       <p>cloud-crypt uses the Google Cloud SDK to mint OAuth tokens. Install it from <a href="https://cloud.google.com/sdk/docs/install" target="_blank">cloud.google.com/sdk</a> or use <code>auth setup --from-secret</code> / <code>--paste</code> to bring your own OAuth blob.</p>
 
       <h3>Need a new secret?</h3>
-      <p><code>scrt4 add NAME=value</code> or <code>scrt4 import FILE</code>. Both work mid-session.</p>
+      <p><code>scrt4 add NAME=value</code>. Works mid-session.</p>
 
       <h3>Still stuck?</h3>
       <p>File an issue at <a href="https://github.com/llmsecrets/llm-secrets/issues" target="_blank">llmsecrets/llm-secrets</a>, or email <code>security@llmsecrets.com</code> for anything sensitive.</p>
