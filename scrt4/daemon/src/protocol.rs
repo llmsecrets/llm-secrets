@@ -145,29 +145,6 @@ pub enum Request {
     #[serde(rename = "setup_local_complete")]
     SetupLocalComplete,
 
-    // ── Share module (issue #61) ─────────────────────────────────────
-    //
-    // The share module's bash side calls these three methods. They live
-    // in core (not behind a module gate) because:
-    //   1. The crypto runs daemon-side and is in the TCB
-    //   2. The protocol surface is tiny and stable
-    //   3. Any module that wants to ship a share-like UX over wormhole
-    //      can reuse this same protocol
-
-    // Revocable, time-limited grants of access to individual secrets.
-    // Cherry-picked from feature/15-critical-secret-reauth.
-
-    // Sets of secrets exported as a passphrase-encrypted file for
-    // batch transfer between deployments.
-
-
-
-
-    //
-    // Issue a short-lived in-memory grant covering the named secrets
-    // after a fresh WebAuthn step-up. Consumed one use at a time by
-    // handle_run when the substituted secret is critical. See
-    // docs/CRITICAL-SECRETS.md for the full spec.
 
     //
     // Re-encrypt the entire vault under a freshly generated master

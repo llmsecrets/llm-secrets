@@ -1360,7 +1360,7 @@ function Invoke-CmdBackupGuide {
               SCRT4 -- BACKUP & RECOVERY GUIDE
 =====================================================================
 
-Full guide: https://github.com/llmsecrets/llm-secrets/blob/main/scrt4/docs/ONBOARDING-HARDENED.md
+Full guide: https://github.com/llmsecrets/llm-secrets/blob/main/BUILD.md
 
 HOW SCRT4 AUTHENTICATION WORKS:
 
