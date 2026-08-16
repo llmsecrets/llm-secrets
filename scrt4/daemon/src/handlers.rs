@@ -1,7 +1,6 @@
 // scrt4/src/handlers.rs
 use base64::Engine;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::UnixStream;
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 
 use crate::audit::{self, AuditEvent, EventType, EventResult};
 use crate::keystore;
@@ -35,9 +34,13 @@ pub async fn handle_request_string(json: &str) -> String {
     })
 }
 
-/// Handle a client connection
-pub async fn handle_connection(stream: UnixStream) {
-    let (reader, mut writer) = stream.into_split();
+/// Handle a client connection. Generic over the transport so the same
+/// loop serves the Unix socket (WSL/Linux) and the named pipe (Windows).
+pub async fn handle_connection<S>(stream: S)
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    let (reader, mut writer) = tokio::io::split(stream);
     let mut reader = BufReader::new(reader);
     let mut line = String::new();
 
@@ -106,9 +109,14 @@ async fn handle_request(line: &str) -> Response {
         Request::UnlockLocalComplete { ttl } => handle_unlock_local_complete(ttl).await,
         Request::SetupLocal => handle_setup_local().await,
         Request::SetupLocalComplete => handle_setup_local_complete().await,
-        Request::ShareSeal { names, all } => handle_share_seal(names, all).await,
-        Request::ShareInventory { path } => handle_share_inventory(path).await,
-        Request::ShareImport { path } => handle_share_import(path).await,
+
+
+
+
+
+
+
+        Request::RotateVault => handle_rotate_vault().await,
 
         // ── Core: Encrypted-folder inventory (F027, F028) ───────
         Request::RegisterEncrypted { path, folder_name, file_count, archive_size } =>
@@ -139,218 +147,11 @@ async fn handle_request(line: &str) -> Response {
 // base — a bug could leak secrets to the wormhole-relay-operator threat
 // model. The handlers themselves are intentionally short.
 
-async fn handle_share_seal(
-    names: Option<Vec<String>>,
-    all: Option<bool>,
-) -> Response {
-    use base64::Engine;
-    use rand::RngCore;
-    use std::io::Write;
-
-    let session = get_session().read().await;
-    if !session.is_active() {
-        return Response::error("No active session");
-    }
-
-    // Snapshot the secrets we want to share.
-    let all_secrets = match session.secrets() {
-        Some(s) => s,
-        None => return Response::error("No secrets in session"),
-    };
-
-    let to_share: std::collections::HashMap<String, String> = if all.unwrap_or(false) {
-        all_secrets.clone()
-    } else {
-        let names = names.unwrap_or_default();
-        if names.is_empty() {
-            return Response::error("No names specified and `all` not set");
-        }
-        let mut subset = std::collections::HashMap::new();
-        for n in &names {
-            match all_secrets.get(n) {
-                Some(v) => { subset.insert(n.clone(), v.clone()); }
-                None => return Response::error(format!("Secret not found: {}", n)),
-            }
-        }
-        subset
-    };
-
-    let count = to_share.len();
-    if count == 0 {
-        return Response::error("Nothing to share — vault is empty");
-    }
-
-    // Serialize to JSON (sorted for determinism in tests).
-    let json_bytes = match serde_json::to_vec(&to_share) {
-        Ok(b) => b,
-        Err(e) => return Response::error(format!("Serialize failed: {}", e)),
-    };
-
-    // Generate ephemeral key + nonce.
-    let mut ephemeral_key = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut ephemeral_key);
-    let mut nonce_bytes = [0u8; 12];
-    rand::thread_rng().fill_bytes(&mut nonce_bytes);
-
-    // AES-256-GCM encrypt.
-    use aes_gcm::aead::Aead;
-    use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
-    let cipher = match Aes256Gcm::new_from_slice(&ephemeral_key) {
-        Ok(c) => c,
-        Err(_) => return Response::error("Cipher init failed"),
-    };
-    let ciphertext = match cipher.encrypt(Nonce::from_slice(&nonce_bytes), json_bytes.as_ref()) {
-        Ok(c) => c,
-        Err(_) => return Response::error("Encrypt failed"),
-    };
-
-    // Write the share file: magic + key + newline + nonce + ciphertext.
-    let engine = base64::engine::general_purpose::STANDARD;
-    let key_b64 = engine.encode(ephemeral_key);
-
-    let path_str = format!("/tmp/scrt4-share-{}.bin", std::process::id());
-    let path = std::path::PathBuf::from(&path_str);
-    let mut f = match std::fs::File::create(&path) {
-        Ok(f) => f,
-        Err(e) => return Response::error(format!("Create temp file failed: {}", e)),
-    };
-    if let Err(e) = (|| -> std::io::Result<()> {
-        f.write_all(b"SCRT4SHARE\n")?;
-        f.write_all(key_b64.as_bytes())?;  // 44 bytes (base64 of 32)
-        f.write_all(b"\n")?;
-        f.write_all(&nonce_bytes)?;
-        f.write_all(&ciphertext)?;
-        Ok(())
-    })() {
-        return Response::error(format!("Write share file failed: {}", e));
-    }
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
-    }
-
-    audit::log_event(
-        AuditEvent::new(EventType::SecretsAdded, EventResult::Success)
-            .with_secret_count(count)
-    );
-    tracing::info!("share_seal: wrote {} secret(s) to {}", count, path_str);
-
-    Response::ok_with_data(ResponseData::ShareSealed { path: path_str, count })
-}
-
-/// Read a share file from disk and return (parsed key, nonce, ciphertext).
-fn read_share_file(path: &str) -> Result<([u8; 32], [u8; 12], Vec<u8>), String> {
-    use base64::Engine;
-    let data = std::fs::read(path)
-        .map_err(|e| format!("Read share file failed: {}", e))?;
-
-    if data.len() < 68 {
-        return Err("Share file too small".into());
-    }
-    if &data[0..11] != b"SCRT4SHARE\n" {
-        return Err("Not a scrt4 share file (bad magic)".into());
-    }
-
-    let engine = base64::engine::general_purpose::STANDARD;
-    let key_b64_bytes = &data[11..55];
-    if data[55] != b'\n' {
-        return Err("Share file format error (missing newline)".into());
-    }
-    let key_b64 = std::str::from_utf8(key_b64_bytes)
-        .map_err(|_| "Key base64 not utf-8")?;
-    let key_vec = engine.decode(key_b64)
-        .map_err(|_| "Key base64 decode failed")?;
-    if key_vec.len() != 32 {
-        return Err("Key wrong length".into());
-    }
-    let mut key = [0u8; 32];
-    key.copy_from_slice(&key_vec);
-
-    let mut nonce = [0u8; 12];
-    nonce.copy_from_slice(&data[56..68]);
-
-    let ciphertext = data[68..].to_vec();
-    Ok((key, nonce, ciphertext))
-}
-
-async fn handle_share_inventory(path: String) -> Response {
-    let (key, nonce, ciphertext) = match read_share_file(&path) {
-        Ok(x) => x,
-        Err(e) => return Response::error(e),
-    };
-
-    use aes_gcm::aead::Aead;
-    use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
-    let cipher = match Aes256Gcm::new_from_slice(&key) {
-        Ok(c) => c,
-        Err(_) => return Response::error("Cipher init failed"),
-    };
-    let plaintext = match cipher.decrypt(Nonce::from_slice(&nonce), ciphertext.as_ref()) {
-        Ok(p) => p,
-        Err(_) => return Response::error("Decryption failed (corrupted or tampered)"),
-    };
-
-    let secrets: std::collections::HashMap<String, String> = match serde_json::from_slice(&plaintext) {
-        Ok(s) => s,
-        Err(e) => return Response::error(format!("Bad payload: {}", e)),
-    };
-
-    let mut names: Vec<String> = secrets.keys().cloned().collect();
-    names.sort_by_key(|k| k.to_lowercase());
-    let count = names.len();
-
-    Response::ok_with_data(ResponseData::ShareInventoried { names, count })
-}
-
-async fn handle_share_import(path: String) -> Response {
-    let (key, nonce, ciphertext) = match read_share_file(&path) {
-        Ok(x) => x,
-        Err(e) => return Response::error(e),
-    };
-
-    use aes_gcm::aead::Aead;
-    use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
-    let cipher = match Aes256Gcm::new_from_slice(&key) {
-        Ok(c) => c,
-        Err(_) => return Response::error("Cipher init failed"),
-    };
-    let plaintext = match cipher.decrypt(Nonce::from_slice(&nonce), ciphertext.as_ref()) {
-        Ok(p) => p,
-        Err(_) => return Response::error("Decryption failed (corrupted or tampered)"),
-    };
-
-    let secrets: std::collections::HashMap<String, String> = match serde_json::from_slice(&plaintext) {
-        Ok(s) => s,
-        Err(e) => return Response::error(format!("Bad payload: {}", e)),
-    };
-
-    let count = secrets.len();
-    let mut session = get_session().write().await;
-    if !session.is_active() {
-        return Response::error("No active session");
-    }
-    if let Err(e) = session.add_secrets(secrets) {
-        return Response::error(e);
-    }
-
-    // Persist the merged vault to disk.
-    if let (Some(all_secrets), Some(master_key)) = (session.secrets(), session.master_key()) {
-        if let Err(e) = keystore::save_encrypted_env(all_secrets, master_key) {
-            tracing::error!("Failed to persist after import: {}", e);
-            return Response::error(format!("Imported in memory but persist failed: {}", e));
-        }
-    }
-
-    audit::log_event(
-        AuditEvent::new(EventType::SecretsAdded, EventResult::Success)
-            .with_secret_count(count)
-    );
-    tracing::info!("share_import: imported {} secret(s) from {}", count, path);
-
-    Response::ok_with_data(ResponseData::ShareImported { count })
-}
+//
+// key to unseal the vault's signing identity. That means an active
+// session, exactly like reveal/backup-key. No new key material is
+// exposed to the client — seal returns ciphertext, open returns only
+// the secrets already destined for this vault.
 
 async fn handle_store(
     token_b64: String,
@@ -467,7 +268,7 @@ async fn handle_run(command: String, working_dir: Option<String>, scope: Option<
         }
     };
 
-    drop(session);
+    drop(session);  // Release lock before we do the classification work
 
     // Apply scope filter if specified
     let secrets = if let Some(ref allowed_names) = scope {
@@ -512,7 +313,10 @@ async fn handle_reveal(name: String) -> Response {
     let mut session = get_session().write().await;
 
     // Always require recent WebAuthn verification for reveal operations.
-    if !session.consume_wa_verification(WA_VERIFY_WINDOW_SECS) {
+    // Exception: dev mode (SCRT4_DEV_MODE=1) skips this check — the whole
+    // point of the dev distribution is to exercise CLI flows without the
+    // WebAuthn ceremony. See keystore::is_dev_mode and issue #59.
+    if !keystore::is_dev_mode() && !session.consume_wa_verification(WA_VERIFY_WINDOW_SECS) {
         audit::log_event(
             AuditEvent::new(EventType::RevealChallengeIssued, EventResult::Failure)
                 .with_secret_name(&name)
@@ -568,8 +372,8 @@ async fn handle_reveal_confirm(challenge: String, code: String) -> Response {
 async fn handle_reveal_all() -> Response {
     let mut session = get_session().write().await;
 
-    // See handle_reveal: same WA gate.
-    if !session.consume_wa_verification(WA_VERIFY_WINDOW_SECS) {
+    // See handle_reveal: same WA gate, same dev-mode exception.
+    if !keystore::is_dev_mode() && !session.consume_wa_verification(WA_VERIFY_WINDOW_SECS) {
         audit::log_event(
             AuditEvent::new(EventType::BulkRevealChallengeIssued, EventResult::Failure)
                 .with_error("WebAuthn verification required")
@@ -659,7 +463,7 @@ async fn handle_unlock_webauthn(_ttl: Option<u64>) -> Response {
     };
 
     // Generate relay auth params for QR code
-    let params = match webauthn::generate_auth_params(&credential, &prf_salt, Some("unlock vault")) {
+    let params = match webauthn::generate_auth_params(&credential, &prf_salt) {
         Ok(p) => p,
         Err(e) => {
             audit::log_event(
@@ -671,11 +475,13 @@ async fn handle_unlock_webauthn(_ttl: Option<u64>) -> Response {
     };
 
     tracing::info!("Unlock phase 1: relay URL generated");
+    let qr = webauthn::render_qr_string(&params.url);
     Response::ok_with_data(ResponseData::RelaySetup {
         url: params.url,
         session_id: params.session_id,
         wrapping_key: params.wrapping_key,
         prf_salt_b64: params.prf_salt_b64,
+        qr,
     })
 }
 
@@ -711,17 +517,19 @@ async fn handle_check_wa_state() -> Response {
 
 /// Setup WebAuthn — phase 1: generate relay params and return QR URL to CLI
 async fn handle_setup_webauthn_init() -> Response {
-    let params = match webauthn::generate_register_params(Some("register new passkey")) {
+    let params = match webauthn::generate_register_params() {
         Ok(p) => p,
         Err(e) => return Response::error(format!("Failed to generate setup params: {}", e)),
     };
 
     tracing::info!("Setup phase 1: relay URL generated");
+    let qr = webauthn::render_qr_string(&params.url);
     Response::ok_with_data(ResponseData::RelaySetup {
         url: params.url,
         session_id: params.session_id,
         wrapping_key: params.wrapping_key,
         prf_salt_b64: params.prf_salt_b64,
+        qr,
     })
 }
 
@@ -782,11 +590,11 @@ async fn handle_setup_webauthn_complete(
         }
     };
 
-    tracing::info!("Setup: PRF output (first 4 bytes): {:02x}{:02x}{:02x}{:02x}",
-        reg_result.prf_output[0], reg_result.prf_output[1],
-        reg_result.prf_output[2], reg_result.prf_output[3]);
-    tracing::info!("Setup: Master key generated: {} bytes, starts with '{}'",
-        master_key.len(), &master_key[..master_key.len().min(8)]);
+    // NEVER log PRF bytes or any part of the master key. The PRF output IS the
+    // wrapping key, and a prefix of the master key is still master key. The
+    // only thing worth knowing here is that we got a well-formed one.
+    tracing::info!("Setup: PRF output received ({} bytes)", reg_result.prf_output.len());
+    tracing::info!("Setup: master key generated ({} chars, base64)", master_key.len());
 
     // Encrypt master key with PRF output
     if let Err(e) = keystore::save_master_key_webauthn(
@@ -837,15 +645,14 @@ async fn handle_unlock_webauthn_complete(
         Err(e) => return Response::error(format!("WebAuthn auth failed: {}", e)),
     };
 
-    tracing::info!("PRF output (first 4 bytes): {:02x}{:02x}{:02x}{:02x}",
-        auth_result.prf_output[0], auth_result.prf_output[1],
-        auth_result.prf_output[2], auth_result.prf_output[3]);
+    // See the note in handle_setup_webauthn_complete: no PRF bytes, no master
+    // key bytes, not even a prefix.
+    tracing::info!("PRF output received ({} bytes)", auth_result.prf_output.len());
 
     // Load master key using PRF output
     let master_key = match keystore::load_master_key_webauthn(&auth_result.prf_output) {
         Ok(k) => {
-            tracing::info!("Master key decrypted OK: {} bytes, starts with '{}'",
-                k.len(), &k[..k.len().min(8)]);
+            tracing::info!("Master key unwrapped OK ({} chars, base64)", k.len());
             k
         }
         Err(e) => return Response::error(format!("Failed to decrypt master key: {}", e)),
@@ -900,8 +707,10 @@ async fn handle_backup_key() -> Response {
     let mut session = get_session().write().await;
 
     // Always require recent WebAuthn verification for backup key access
-    // (single-use).
-    if !session.consume_wa_verification(WA_VERIFY_WINDOW_SECS) {
+    // (single-use). Dev mode skips this gate — the dev master key is a
+    // hardcoded constant in the source anyway, so requiring auth would
+    // be theatre. See issue #59.
+    if !keystore::is_dev_mode() && !session.consume_wa_verification(WA_VERIFY_WINDOW_SECS) {
         audit::log_event(
             AuditEvent::new(EventType::BackupKeyRequested, EventResult::Failure)
                 .with_error("WebAuthn verification required")
@@ -935,7 +744,8 @@ async fn handle_initialize_keys_webauthn() -> Response {
 /// Disable WebAuthn 2FA for reveal operations
 async fn handle_disable_wa() -> Response {
     // Require active session + recent WebAuthn verification (single-use).
-    {
+    // Dev mode skips both — auth is off across the board, see issue #59.
+    if !keystore::is_dev_mode() {
         let mut session = get_session().write().await;
         if !session.is_active() {
             return Response::error("Active session required to change WebAuthn settings");
@@ -988,7 +798,8 @@ async fn handle_enable_wa() -> Response {
 /// Disable WebAuthn 2FA for unlock operations
 async fn handle_disable_wa_unlock() -> Response {
     // Require active session + recent WebAuthn verification (single-use).
-    {
+    // Dev mode skips both — auth is off across the board, see issue #59.
+    if !keystore::is_dev_mode() {
         let mut session = get_session().write().await;
         if !session.is_active() {
             return Response::error("Active session required to change WebAuthn settings");
@@ -1064,9 +875,10 @@ async fn handle_unlock_local(_ttl: Option<u64>) -> Response {
     let salt_b64 = base64::Engine::encode(&engine, &prf_salt);
 
     let wrapping_key = webauthn::generate_hex_public(32);
+
     let mut challenge_bytes = [0u8; 32];
     rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut challenge_bytes);
-    let challenge_b64 = base64::Engine::encode(&engine, &challenge_bytes);
+    let challenge_b64 = base64::Engine::encode(&engine, challenge_bytes);
 
     let server = match localhost::start(
         "auth",
@@ -1113,9 +925,7 @@ async fn handle_unlock_local_complete(ttl: Option<u64>) -> Response {
         Err(e) => return Response::error(format!("WebAuthn auth failed: {}", e)),
     };
 
-    tracing::info!("Local auth PRF (first 4 bytes): {:02x}{:02x}{:02x}{:02x}",
-        auth_result.prf_output[0], auth_result.prf_output[1],
-        auth_result.prf_output[2], auth_result.prf_output[3]);
+    tracing::info!("Local auth: PRF output received ({} bytes)", auth_result.prf_output.len());
 
     // Load master key from the LOCAL key file
     let master_key = match keystore::load_master_key_local(&auth_result.prf_output) {
@@ -1259,11 +1069,121 @@ async fn handle_setup_local_complete() -> Response {
     tracing::info!("Localhost credential registered, master key wrapped");
     Response::ok()
 }
+// ══════════════════════════════════════════════════════════════════
+
+// ── Lease Handlers ─────────────────────────────────────────────
+
+// ── Bundle Handlers ────────────────────────────────────────────
+
+
+
+
+//
+// Mirrors the `handle_migrate` pattern from the legacy llm-secrets
+// daemon (wsl-daemon/src/handlers.rs + keystore.rs::migrate_secrets):
+//
+//   1. Read the secrets and the current master key from the active
+//      session (the migrate flow takes these from the client; we have
+//      them already because the session is unlocked).
+//   2. Generate a new 32-byte master key via generate_new_master_key.
+//   3. Re-encrypt every secret under the new key via save_encrypted_env.
+//   4. Update the session's cached master_key so subsequent AddSecrets
+//      / RevealAll / Run operations stay consistent with the new key.
+//   5. Return the new master key to the caller so it can be backed up.
+//
+// This rotates the VAULT encryption key (~/.scrt4(-dev)/vault/secrets.env).
+// It does NOT touch the hardened ~/.scrt4/master.key wrapper, which
+// is WebAuthn-PRF-protected and cannot be re-wrapped without a fresh
+// PRF ceremony. In hardened mode the caller is responsible for one
+// of the follow-up actions:
+//
+//   - `scrt4 backup-key --save DIR` — save the new raw master key so
+//     the vault can be recovered if the WebAuthn credential is lost.
+//   - `scrt4 setup` — re-enroll WebAuthn against the new master key,
+//     which writes a new master.key wrapper under a fresh PRF.
+//
+// The response carries `wrapper_stale: true` in hardened mode so the
+// CLI knows to drive one of those flows before the session ends.
+// Until a follow-up re-wrap happens, the in-memory session still
+// works, but a fresh unlock (cold start) would fail because the
+// master.key wrapper unwraps to the OLD key.
+//
+// Dev mode: the daemon bootstraps with a fixed in-memory key at
+// startup and does not persist a WebAuthn wrapper, so rotation is
+// purely in-memory + the vault file. A daemon restart re-bootstraps
+// with the original fixed key and the rotated vault will no longer
+// decrypt. This is expected — dev is a scratch harness.
+//
+// Step-up: require a fresh WebAuthn verification (same window as
+// reveal paths) before allowing rotation, unless in dev mode.
+
+async fn handle_rotate_vault() -> Response {
+    let mut session = get_session().write().await;
+    if !session.is_active() {
+        return Response::error("No active session");
+    }
+
+    if !keystore::is_dev_mode() && !session.consume_wa_verification(WA_VERIFY_WINDOW_SECS) {
+        return Response::error(
+            "WebAuthn step-up required before vault rotation — unlock again first",
+        );
+    }
+
+    let current_secrets = match session.secrets() {
+        Some(s) => s.clone(),
+        None => return Response::error("No secrets in session"),
+    };
+    let secret_count = current_secrets.len();
+
+    let new_master_key = match keystore::generate_new_master_key() {
+        Ok(k) => k,
+        Err(e) => return Response::error(format!("Failed to generate new master key: {}", e)),
+    };
+
+    // Atomic-ish replace: save_encrypted_env uses `std::fs::write` which
+    // on POSIX is a single syscall for files under the filesystem's
+    // atomic-write block size, and the vault file is small. A partial
+    // failure leaves the OLD vault on disk (because `write` truncates
+    // and replaces, it doesn't destroy on failure) — the session
+    // still has the new key in memory if we succeed past this point.
+    if let Err(e) = keystore::save_encrypted_env(&current_secrets, &new_master_key) {
+        return Response::error(format!("Failed to write rotated vault: {}", e));
+    }
+
+    session.set_master_key(new_master_key.clone());
+
+    drop(session);
+
+    let wrapper_stale = !keystore::is_dev_mode();
+
+    audit::log_event(
+        AuditEvent::new(EventType::SecretsAdded, EventResult::Success)
+            .with_error(&format!(
+                "VaultRotated secret_count={} wrapper_stale={}",
+                secret_count, wrapper_stale
+            ))
+    );
+
+    tracing::warn!(
+        "Vault rotated: secret_count={} wrapper_stale={}",
+        secret_count,
+        wrapper_stale
+    );
+
+    Response::ok_with_data(ResponseData::VaultRotated {
+        new_master_key_b64: new_master_key,
+        secret_count,
+        wrapper_stale,
+    })
+}
+
 // ── Core: Encrypted-folder inventory handlers (F027, F028) ──────────
 //
 // Thin wrappers over crate::encrypted_inventory. All RPCs require an
 // active session — the inventory is vault-adjacent bookkeeping and
-// should not be readable/writable without authentication.
+// should not be readable/writable without authentication. Dev mode
+// already has an active session via the bootstrap, so there's no
+// special case here.
 
 async fn handle_register_encrypted(
     path: String,
@@ -1355,3 +1275,4 @@ async fn handle_cleanup_encrypted(remove_missing: bool) -> Response {
         Err(e) => Response::error(format!("cleanup_encrypted: {}", e)),
     }
 }
+

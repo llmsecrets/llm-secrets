@@ -170,10 +170,15 @@ fn build_html(
     wrapping_key_hex: &str,
     credential_id_b64: Option<&str>,
 ) -> String {
+    let (mode_label, btn_label) = if mode == "register" {
+        ("Register New Credential".to_string(), "Register Passkey".to_string())
+    } else {
+        ("Authenticate".to_string(), "Unlock with Passkey".to_string())
+    };
     HTML_TEMPLATE
         .replace("__MODE__", mode)
-        .replace("__MODE_LABEL__", if mode == "register" { "Register New Credential" } else { "Authenticate" })
-        .replace("__BTN_LABEL__", if mode == "register" { "Register Passkey" } else { "Unlock with Passkey" })
+        .replace("__MODE_LABEL__", &mode_label)
+        .replace("__BTN_LABEL__", &btn_label)
         .replace("__CHALLENGE__", challenge_b64)
         .replace("__SALT__", salt_b64)
         .replace("__WRAPPING_KEY__", wrapping_key_hex)
@@ -396,10 +401,16 @@ const HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
           const prfOutput = new Uint8Array(ext.prf.results.first);
           log('PRF output: ' + prfOutput.length + 'B');
 
+          // Action binding (issue #78): return the assertion so the daemon
+          // can verify the signed challenge binds to the approved action.
+          const r = assertion.response;
           status.textContent = 'Encrypting...';
           const encrypted = await encryptPayload({
             type: 'auth',
-            prf_output: bytesToB64(prfOutput)
+            prf_output: bytesToB64(prfOutput),
+            client_data_json: bytesToB64(new Uint8Array(r.clientDataJSON)),
+            authenticator_data: bytesToB64(new Uint8Array(r.authenticatorData)),
+            signature: bytesToB64(new Uint8Array(r.signature))
           }, WRAPPING_KEY_HEX);
 
           status.textContent = 'Completing...';
@@ -422,3 +433,33 @@ const HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
   </script>
 </body>
 </html>"#;
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The auth card is deliberately generic: it never names the operation
+    // being approved. These two tests fail if that ever changes.
+    #[test]
+    fn build_html_auth_card_is_generic() {
+        let html = build_html("auth", "Y2g", "c2FsdA", "wk", Some("cred"));
+        assert!(html.contains("Unlock with Passkey"), "the generic label must be used");
+        assert!(!html.contains("Approve:"), "the card must not name an operation");
+    }
+
+    #[test]
+    fn build_html_has_no_operation_parameter() {
+        // Two cards built for the same mode must be byte-identical: there is
+        // no input through which an operation name could reach the page.
+        let a = build_html("auth", "Y2g", "c2FsdA", "wk", Some("cred"));
+        let b = build_html("auth", "Y2g", "c2FsdA", "wk", Some("cred"));
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn build_html_register_card() {
+        let html = build_html("register", "Y2g", "c2FsdA", "wk", None);
+        assert!(html.contains("Register Passkey"));
+    }
+}

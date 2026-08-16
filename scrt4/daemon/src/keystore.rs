@@ -42,10 +42,57 @@ pub struct MasterKeyFile {
     pub webauthn_credential_id: Option<String>, // base64 — which credential was used
 }
 
-/// Get the scrt4 config directory (`~/.scrt4`).
+// ── Dev mode (issue #59) ────────────────────────────────────────────
+//
+// When SCRT4_DEV_MODE=1 is set in the daemon environment, the daemon:
+//   1. Reads + writes the vault under ~/.scrt4-dev/ instead of ~/.scrt4/
+//      (different directory = cross-distribution open is impossible by
+//      construction — there is no shared state between hardened and dev)
+//   2. Uses a fixed master key (DEV_MASTER_KEY_B64 below) so unlocking
+//      requires no WebAuthn ceremony
+//   3. Auto-bootstraps an active session at daemon startup (see main.rs)
+//
+// This is documented as "do not store real secrets" and the wrapper
+// banner says so loudly. The fixed key is in source so anyone reading
+// this file can decrypt a dev vault — that's intentional.
+
+/// True iff SCRT4_DEV_MODE=1 is set in the daemon's environment.
+pub fn is_dev_mode() -> bool {
+    std::env::var("SCRT4_DEV_MODE")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
+/// Fixed master key for dev mode. Exactly 32 bytes (the AES-256 key
+/// size), base64-encoded. Plaintext: "dev-mode-fixed-key-not-secure-32".
+/// Hardcoded in source on purpose — dev mode is a developer convenience,
+/// not a security boundary.
+pub const DEV_MASTER_KEY_B64: &str = "ZGV2LW1vZGUtZml4ZWQta2V5LW5vdC1zZWN1cmUtMzI=";
+
+/// Get the scrt4 config directory.
+///
+/// Hardened: ~/.scrt4
+/// Dev:      ~/.scrt4-dev   (when SCRT4_DEV_MODE=1)
+///
+/// SCRT4_CONFIG_DIR overrides the location outright — the whole vault
+/// (secrets, master key, share identity) lives under it. It exists so a
+/// user can point at an alternate vault, and so multiple independent
+/// vaults can run side by side (dirs::home_dir() ignores a USERPROFILE
+/// override on Windows, which otherwise makes that impossible). It is not
+/// a security boundary: an attacker who sets it just points at a
+/// different vault, which still requires that vault's passkey to unlock.
 pub fn config_dir() -> PathBuf {
-    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/tmp"));
-    home.join(".scrt4")
+    if let Ok(dir) = std::env::var("SCRT4_CONFIG_DIR") {
+        if !dir.is_empty() {
+            return PathBuf::from(dir);
+        }
+    }
+    let home = dirs::home_dir().unwrap_or_else(std::env::temp_dir);
+    if is_dev_mode() {
+        home.join(".scrt4-dev")
+    } else {
+        home.join(".scrt4")
+    }
 }
 
 /// Get the vault directory (~/.scrt4/vault)
@@ -86,11 +133,6 @@ pub fn load_prf_salt_local() -> Result<[u8; 32], String> {
 /// Get the secrets file path (~/.scrt4/vault/secrets.enc)
 pub fn secrets_path() -> PathBuf {
     vault_dir().join("secrets.enc")
-}
-
-/// Check if scrt4 has been initialized (master.key exists)
-pub fn is_initialized() -> bool {
-    master_key_path().exists()
 }
 
 // ── Master key management (WebAuthn PRF) ───────────────────────────
@@ -226,19 +268,6 @@ fn load_prf_salt_from(path: &std::path::Path) -> Result<[u8; 32], String> {
 
 // ── Unlock flow ────────────────────────────────────────────────────
 
-/// Full unlock flow using WebAuthn PRF output.
-pub fn unlock_secrets_webauthn(prf_output: &[u8; 32]) -> Result<(HashMap<String, String>, String), String> {
-    tracing::info!("Starting unlock flow (WebAuthn PRF)");
-
-    let master_key = load_master_key_webauthn(prf_output)?;
-    tracing::info!("Master key decrypted with WebAuthn PRF");
-
-    let secrets = decrypt_secrets(&master_key)?;
-    tracing::info!("Decrypted {} secrets", secrets.len());
-
-    Ok((secrets, master_key))
-}
-
 // ── Vault (secrets.enc) management ──────────────────────────────────
 
 fn extract_data_from_env_json(json_content: &str) -> Result<String, String> {
@@ -319,7 +348,14 @@ fn encrypt_env_content_with_master_key(
     Ok(engine.encode(&combined))
 }
 
+/// Parse decrypted vault plaintext into a secret map.
+/// Tries JSON first (v2 format), falls back to legacy KEY=VALUE\n format.
 pub fn parse_env(content: &str) -> HashMap<String, String> {
+    if let Ok(secrets) = serde_json::from_str::<HashMap<String, String>>(content) {
+        return secrets;
+    }
+
+    // Legacy v1 format: newline-separated KEY=VALUE
     let mut vars = HashMap::new();
     for line in content.lines() {
         let trimmed = line.trim();
@@ -359,11 +395,8 @@ fn save_encrypted_env_to(
     master_key: &str,
     path: &std::path::Path,
 ) -> Result<(), String> {
-    let mut lines: Vec<String> = secrets.iter()
-        .map(|(k, v)| format!("{}={}", k, v))
-        .collect();
-    lines.sort();
-    let plaintext = lines.join("\n");
+    let plaintext = serde_json::to_string(secrets)
+        .map_err(|e| format!("Failed to serialize secrets: {}", e))?;
 
     let encrypted_base64 = encrypt_env_content_with_master_key(&plaintext, master_key)?;
     let json = format!(r#"{{"Data":"{}"}}"#, encrypted_base64);
@@ -485,13 +518,22 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_env() {
+    fn test_parse_env_legacy_format() {
         let content = "# Comment\nAPI_KEY=secret123\nDB_PASSWORD=p@ssw0rd!\nEMPTY=\nINVALID LINE\n";
         let vars = parse_env(content);
         assert_eq!(vars.get("API_KEY"), Some(&"secret123".to_string()));
         assert_eq!(vars.get("DB_PASSWORD"), Some(&"p@ssw0rd!".to_string()));
         assert_eq!(vars.get("EMPTY"), Some(&"".to_string()));
         assert!(!vars.contains_key("INVALID LINE"));
+    }
+
+    #[test]
+    fn test_parse_env_json_format() {
+        let content = r#"{"API_KEY":"secret123","DB_PASSWORD":"p@ssw0rd!","EMPTY":""}"#;
+        let vars = parse_env(content);
+        assert_eq!(vars.get("API_KEY"), Some(&"secret123".to_string()));
+        assert_eq!(vars.get("DB_PASSWORD"), Some(&"p@ssw0rd!".to_string()));
+        assert_eq!(vars.get("EMPTY"), Some(&"".to_string()));
     }
 
     #[test]
@@ -508,6 +550,50 @@ mod tests {
         let loaded = decrypt_secrets_from(&master_key, &vault_path).unwrap();
         assert_eq!(loaded.get("API_KEY"), Some(&"sk-123456".to_string()));
         assert_eq!(loaded.len(), 2);
+    }
+
+    #[test]
+    fn test_multiline_secret_roundtrip() {
+        let dir = tempdir().unwrap();
+        let vault_path = dir.path().join("secrets.enc");
+
+        let master_key = generate_new_master_key().unwrap();
+        let mut secrets = HashMap::new();
+        secrets.insert("SSH_KEY".to_string(),
+            "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEA\nAAAAGnNrLWVkMjU1MTk=\n-----END OPENSSH PRIVATE KEY-----".to_string());
+        secrets.insert("SIMPLE".to_string(), "no-newlines".to_string());
+
+        save_encrypted_env_to(&secrets, &master_key, &vault_path).unwrap();
+        let loaded = decrypt_secrets_from(&master_key, &vault_path).unwrap();
+        assert_eq!(loaded.get("SSH_KEY").unwrap().lines().count(), 4);
+        assert!(loaded.get("SSH_KEY").unwrap().starts_with("-----BEGIN"));
+        assert!(loaded.get("SSH_KEY").unwrap().ends_with("-----END OPENSSH PRIVATE KEY-----"));
+        assert_eq!(loaded.get("SIMPLE"), Some(&"no-newlines".to_string()));
+        assert_eq!(loaded.len(), 2);
+    }
+
+    #[test]
+    fn test_legacy_vault_auto_migrates() {
+        let dir = tempdir().unwrap();
+        let vault_path = dir.path().join("secrets.enc");
+
+        let master_key = generate_new_master_key().unwrap();
+
+        // Write in legacy KEY=VALUE\n format
+        let legacy_plaintext = "API_KEY=sk-legacy\nDB_PASS=old-format";
+        let encrypted = encrypt_env_content_with_master_key(legacy_plaintext, &master_key).unwrap();
+        let json = format!(r#"{{"Data":"{}"}}"#, encrypted);
+        std::fs::write(&vault_path, &json).unwrap();
+
+        // Read should still work via fallback
+        let loaded = decrypt_secrets_from(&master_key, &vault_path).unwrap();
+        assert_eq!(loaded.get("API_KEY"), Some(&"sk-legacy".to_string()));
+        assert_eq!(loaded.get("DB_PASS"), Some(&"old-format".to_string()));
+
+        // Re-save upgrades to JSON format
+        save_encrypted_env_to(&loaded, &master_key, &vault_path).unwrap();
+        let reloaded = decrypt_secrets_from(&master_key, &vault_path).unwrap();
+        assert_eq!(reloaded, loaded);
     }
 
     #[test]

@@ -9,9 +9,17 @@ description = "WebAuthn PRF secret manager daemon"
 tokio = { version = "1", features = ["full", "net", "process", "io-util", "sync"] }
 
 # WebAuthn server
+#
+# webauthn-rs is deliberately NOT a dependency. It was declared but referenced
+# in zero source files, and it was the sole thing dragging in openssl-sys --
+# which is why building on Windows used to require vcpkg and a 14-minute
+# OpenSSL build. The WebAuthn ceremony is not performed in Rust at all: the
+# browser runs navigator.credentials with the PRF extension (localhost.rs's
+# page / the relay's auth.html), and the daemon only ever handles the
+# AES-GCM-wrapped PRF output. See daemon/src/webauthn.rs.
+#
+# The daemon now builds with nothing but a Rust toolchain, on every platform.
 axum = "0.7"
-webauthn-rs = { version = "0.5", features = ["danger-allow-state-serialisation"] }
-webauthn-rs-proto = "0.5"
 url = "2"
 tower-http = { version = "0.5", features = ["cors"] }
 
@@ -31,7 +39,6 @@ hex = "0.4"
 dirs = "5"
 regex = "1"
 zeroize = { version = "1", features = ["derive"] }
-libc = "0.2"
 tracing = "0.1"
 tracing-subscriber = "0.3"
 tempfile = "3"
@@ -40,14 +47,22 @@ qrcode = "0.14"
 # SHA-256 for stable entry IDs in encrypted_inventory.rs
 sha2 = "0.10"
 
-# Force vendored OpenSSL so cross-compile to aarch64 doesn't need
-# libssl-dev:arm64 on the builder. webauthn-rs pulls in openssl-sys
-# transitively; adding openssl here with the `vendored` feature causes
-# openssl-sys to statically compile OpenSSL from bundled source.
-openssl = { version = "0.10", features = ["vendored"] }
-
 # Migration from scrt3 (optional)
 argon2 = { version = "0.5", optional = true }
+
+# Unix socket path fallback (getuid)
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+# Named-pipe DACL (winpipe.rs)
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_System_Memory",
+    "Win32_System_Threading",
+] }
 
 [features]
 default = []

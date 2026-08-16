@@ -13,9 +13,11 @@
 //!   scrt4 daemon                    Start the daemon (foreground)
 
 use std::io::{BufRead, BufReader, Write};
+#[cfg(unix)]
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 
+#[cfg(unix)]
 fn get_socket_path() -> PathBuf {
     if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
         PathBuf::from(runtime_dir).join("scrt4.sock")
@@ -25,6 +27,19 @@ fn get_socket_path() -> PathBuf {
     }
 }
 
+#[cfg(windows)]
+fn get_pipe_path() -> PathBuf {
+    if let Ok(name) = std::env::var("SCRT4_PIPE_NAME") {
+        if name.starts_with(r"\\.\pipe\") {
+            return PathBuf::from(name);
+        }
+        return PathBuf::from(format!(r"\\.\pipe\{}", name));
+    }
+    let user = std::env::var("USERNAME").unwrap_or_else(|_| "default".to_string());
+    PathBuf::from(format!(r"\\.\pipe\scrt4-{}", user))
+}
+
+#[cfg(unix)]
 fn send_request(request_json: &str) -> Result<serde_json::Value, String> {
     let socket_path = get_socket_path();
 
@@ -39,6 +54,43 @@ fn send_request(request_json: &str) -> Result<serde_json::Value, String> {
 
     // Read response line
     let mut reader = BufReader::new(&stream);
+    let mut response_line = String::new();
+    reader.read_line(&mut response_line)
+        .map_err(|e| format!("Failed to read response: {}", e))?;
+
+    serde_json::from_str(&response_line)
+        .map_err(|e| format!("Invalid response: {}", e))
+}
+
+#[cfg(windows)]
+fn send_request(request_json: &str) -> Result<serde_json::Value, String> {
+    const ERROR_PIPE_BUSY: i32 = 231;
+
+    let pipe_path = get_pipe_path();
+
+    // A named pipe opens like a file. All instances busy → brief retry.
+    let mut attempts = 0;
+    let mut stream = loop {
+        match std::fs::OpenOptions::new().read(true).write(true).open(&pipe_path) {
+            Ok(f) => break f,
+            Err(e) if e.raw_os_error() == Some(ERROR_PIPE_BUSY) && attempts < 3 => {
+                attempts += 1;
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            Err(e) => {
+                return Err(format!("Cannot connect to daemon at {:?}: {}. Is scrt4 daemon running? Start with: scrt4 daemon", pipe_path, e));
+            }
+        }
+    };
+
+    // Send request as a single JSON line
+    stream.write_all(format!("{}\n", request_json).as_bytes())
+        .map_err(|e| format!("Failed to send request: {}", e))?;
+    stream.flush()
+        .map_err(|e| format!("Failed to flush: {}", e))?;
+
+    // Read response line
+    let mut reader = BufReader::new(stream);
     let mut response_line = String::new();
     reader.read_line(&mut response_line)
         .map_err(|e| format!("Failed to read response: {}", e))?;
@@ -295,10 +347,11 @@ fn parse_ttl_arg(args: &[String]) -> Option<u64> {
 
 fn exec_daemon() -> String {
     // Find the daemon binary next to the CLI binary
+    let daemon_name = if cfg!(windows) { "scrt4-daemon.exe" } else { "scrt4-daemon" };
     let current_exe = std::env::current_exe().unwrap_or_default();
     let daemon_path = current_exe.parent()
-        .map(|p| p.join("scrt4-daemon"))
-        .unwrap_or_else(|| PathBuf::from("scrt4-daemon"));
+        .map(|p| p.join(daemon_name))
+        .unwrap_or_else(|| PathBuf::from(daemon_name));
 
     if daemon_path.exists() {
         let err = std::process::Command::new(&daemon_path)

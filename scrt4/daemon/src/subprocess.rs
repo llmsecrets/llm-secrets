@@ -12,6 +12,22 @@ pub struct RunResult {
     pub output: String,  // Sanitized
 }
 
+/// Shell-quote a value so it is treated as a single literal token by sh -c.
+/// Uses single quotes (which suppress all shell interpretation) and escapes
+/// any embedded single quotes via the '\'' idiom.
+#[cfg(unix)]
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+/// cmd.exe counterpart: single quotes are literal characters there, so wrap
+/// in double quotes and escape embedded double quotes by doubling them
+/// (the Microsoft CRT argv parser's escape inside a quoted region).
+#[cfg(not(unix))]
+fn shell_quote(s: &str) -> String {
+    format!("\"{}\"", s.replace('"', "\"\""))
+}
+
 /// Substitute $env[NAME] patterns with actual secret values
 fn substitute_secrets(command: &str, secrets: &HashMap<String, String>) -> Result<(String, HashMap<String, String>), String> {
     let re = Regex::new(r"\$env\[([^\]]+)\]").unwrap();
@@ -29,7 +45,7 @@ fn substitute_secrets(command: &str, secrets: &HashMap<String, String>) -> Resul
         match secrets.get(secret_name) {
             Some(value) => {
                 used_secrets.insert(secret_name.to_string(), value.clone());
-                result.replace_range(full_match.range(), value);
+                result.replace_range(full_match.range(), &shell_quote(value));
             }
             None => {
                 return Err(format!("Secret not found: {}", secret_name));
@@ -60,8 +76,15 @@ pub async fn run_with_secrets(
     };
     #[cfg(not(unix))]
     let mut cmd = {
+        use std::os::windows::process::CommandExt;
         let mut c = Command::new("cmd");
-        c.arg("/c").arg(&substituted_cmd);
+        c.arg("/c");
+        // raw_arg, not arg: `arg` applies MSVC argv escaping, which rewrites
+        // the `"` our shell_quote emits into `\"`. cmd.exe does not use MSVC
+        // rules, so it would pass those backslashes through literally.
+        // Caveat: cmd expands %VAR% even inside double quotes, so a secret
+        // containing %NAME% is subject to environment expansion.
+        c.as_std_mut().raw_arg(&substituted_cmd);
         c
     };
 
@@ -87,7 +110,17 @@ pub async fn run_with_secrets(
     }
 
     // Sanitize ALL secrets (not just used ones) from output.
-    let output_str = sanitize_output(&combined, all_secrets);
+    // Dev mode (SCRT4_DEV_MODE=1) skips sanitization so contributors can
+    // see the actual command output during testing — the dev distribution
+    // is already documented "do not store real secrets". See issue #59.
+    let dev_mode = std::env::var("SCRT4_DEV_MODE")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    let output_str = if dev_mode {
+        combined
+    } else {
+        sanitize_output(&combined, all_secrets)
+    };
 
     Ok(RunResult {
         exit_code,
@@ -106,7 +139,10 @@ mod tests {
 
         let (result, used) = substitute_secrets("echo $env[KEY]", &secrets).unwrap();
 
-        assert_eq!(result, "echo value123");
+        #[cfg(unix)]
+        assert_eq!(result, "echo 'value123'");
+        #[cfg(not(unix))]
+        assert_eq!(result, "echo \"value123\"");
         assert_eq!(used.get("KEY"), Some(&"value123".to_string()));
     }
 
@@ -118,7 +154,10 @@ mod tests {
 
         let (result, _) = substitute_secrets("$env[A] and $env[B]", &secrets).unwrap();
 
-        assert_eq!(result, "aaa and bbb");
+        #[cfg(unix)]
+        assert_eq!(result, "'aaa' and 'bbb'");
+        #[cfg(not(unix))]
+        assert_eq!(result, "\"aaa\" and \"bbb\"");
     }
 
     #[test]
@@ -149,6 +188,44 @@ mod tests {
 
         let (result, _) = substitute_secrets("$env[USER]:$env[PASS]", &secrets).unwrap();
 
-        assert_eq!(result, "admin:secret");
+        #[cfg(unix)]
+        assert_eq!(result, "'admin':'secret'");
+        #[cfg(not(unix))]
+        assert_eq!(result, "\"admin\":\"secret\"");
+    }
+
+    #[test]
+    fn test_substitute_shell_metacharacters() {
+        let mut secrets = HashMap::new();
+        secrets.insert("PASS".to_string(), "h3llo W*rld!".to_string());
+
+        let (result, _) = substitute_secrets("VAR=$env[PASS] cmd", &secrets).unwrap();
+
+        #[cfg(unix)]
+        assert_eq!(result, "VAR='h3llo W*rld!' cmd");
+        #[cfg(not(unix))]
+        assert_eq!(result, "VAR=\"h3llo W*rld!\" cmd");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_substitute_embedded_single_quote() {
+        let mut secrets = HashMap::new();
+        secrets.insert("VAL".to_string(), "it's here".to_string());
+
+        let (result, _) = substitute_secrets("echo $env[VAL]", &secrets).unwrap();
+
+        assert_eq!(result, "echo 'it'\\''s here'");
+    }
+
+    #[test]
+    #[cfg(not(unix))]
+    fn test_substitute_embedded_double_quote() {
+        let mut secrets = HashMap::new();
+        secrets.insert("VAL".to_string(), "say \"hi\" now".to_string());
+
+        let (result, _) = substitute_secrets("echo $env[VAL]", &secrets).unwrap();
+
+        assert_eq!(result, "echo \"say \"\"hi\"\" now\"");
     }
 }

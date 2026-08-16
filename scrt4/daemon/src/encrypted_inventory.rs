@@ -14,7 +14,7 @@
 //!
 //! ## Storage
 //!
-//! `~/.scrt4/encrypted-inventory.json`
+//! `~/.scrt4(-dev)/encrypted-inventory.json`  — honors SCRT4_DEV_MODE the
 //!
 //! ## Concurrency
 //!
@@ -59,18 +59,22 @@ impl InventoryStore {
 
 // ── Path helpers ───────────────────────────────────────────────────
 
-/// Returns the path to the encrypted-folder inventory file
-/// (`~/.scrt4/encrypted-inventory.json`).
+/// Returns the path to the encrypted-folder inventory file.
+///
+/// Hardened: `~/.scrt4/encrypted-inventory.json`
+/// Dev:      `~/.scrt4-dev/encrypted-inventory.json`  (SCRT4_DEV_MODE=1)
+///
+/// keystore for a one-line path decision.
 pub fn inventory_path() -> PathBuf {
-    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/tmp"));
-    home.join(".scrt4").join("encrypted-inventory.json")
+    let home = dirs::home_dir().unwrap_or_else(std::env::temp_dir);
+    let dev_mode = std::env::var("SCRT4_DEV_MODE")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    let config = if dev_mode { ".scrt4-dev" } else { ".scrt4" };
+    home.join(config).join("encrypted-inventory.json")
 }
 
 // ── Load / save ────────────────────────────────────────────────────
-
-pub fn load_inventory() -> InventoryStore {
-    load_inventory_from(&inventory_path())
-}
 
 fn load_inventory_from(path: &std::path::Path) -> InventoryStore {
     match std::fs::read_to_string(path) {
@@ -83,10 +87,6 @@ fn load_inventory_from(path: &std::path::Path) -> InventoryStore {
         },
         Err(_) => InventoryStore::empty(),
     }
-}
-
-pub fn save_inventory(store: &InventoryStore) -> Result<(), String> {
-    save_inventory_to(store, &inventory_path())
 }
 
 fn save_inventory_to(store: &InventoryStore, path: &std::path::Path) -> Result<(), String> {
@@ -282,9 +282,9 @@ mod tests {
     use super::*;
 
     // Tests exercise the `_at` variants with an explicit temp path so
-    // they do not touch the process-global HOME env var. This keeps them
-    // independent of any other tests that mutate HOME, so cargo test can
-    // run modules in parallel without races.
+    // they do not touch the process-global HOME or SCRT4_DEV_MODE env
+    // that DO mutate HOME, so cargo test can run modules in parallel
+    // without cross-module races.
 
     fn tmp_store() -> (tempfile::TempDir, std::path::PathBuf) {
         let dir = tempfile::tempdir().unwrap();
