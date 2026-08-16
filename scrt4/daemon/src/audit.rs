@@ -19,6 +19,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// Event types for audit logging
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
+// Some variants are defined ahead of the code that will emit them.
+#[allow(dead_code)]
 pub enum EventType {
     /// Session started (after successful unlock)
     SessionStart,
@@ -310,17 +312,29 @@ pub fn log_simple(event_type: EventType, result: EventResult) {
 /// The audit logger
 pub struct AuditLogger {
     writer: Mutex<Option<BufWriter<File>>>,
+    #[allow(dead_code)]
     log_path: PathBuf,
 }
 
 impl AuditLogger {
     /// Create a new audit logger.
     ///
-    /// When `log_dir` is None, defaults to `~/.scrt4/audit/`.
+    /// When `log_dir` is None, defaults to `<config_dir>/audit/`. The
+    /// config dir respects SCRT4_DEV_MODE — see crate::keystore::config_dir.
+    /// This keeps the dev daemon's audit log under ~/.scrt4-dev/audit/
+    /// alongside the dev vault, instead of writing to the hardened
+    /// distribution's audit dir (which was ISS014).
     pub fn new(log_dir: Option<PathBuf>) -> Self {
         let log_dir = log_dir.unwrap_or_else(|| {
-            dirs::home_dir().unwrap_or_else(|| PathBuf::from("/tmp"))
-                .join(".scrt4").join("audit")
+            // Inline copy of keystore::config_dir to avoid a circular dep:
+            // keystore is a sibling module that the audit logger should
+            // not depend on. The logic must stay in sync.
+            let dev_mode = std::env::var("SCRT4_DEV_MODE")
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(false);
+            let config = if dev_mode { ".scrt4-dev" } else { ".scrt4" };
+            dirs::home_dir().unwrap_or_else(std::env::temp_dir)
+                .join(config).join("audit")
         });
 
         // Ensure directory exists
@@ -367,6 +381,7 @@ impl AuditLogger {
     }
 
     /// Get the log file path
+    #[allow(dead_code)]
     pub fn log_path(&self) -> &PathBuf {
         &self.log_path
     }

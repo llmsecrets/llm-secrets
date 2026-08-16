@@ -334,30 +334,11 @@ pub fn load_config() -> RemoteConfig {
     RemoteConfig::default()
 }
 
-/// Save remote config to file
-pub fn save_config(config: &RemoteConfig) -> Result<(), std::io::Error> {
-    let config_path = get_config_path();
-
-    if let Some(parent) = config_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
-    let json = serde_json::to_string_pretty(config)?;
-    std::fs::write(config_path, json)
-}
-
 /// Get the config file path
 fn get_config_path() -> std::path::PathBuf {
-    dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
+    dirs::home_dir().unwrap_or_else(std::env::temp_dir)
         .join(".scrt4")
         .join("remote-config.json")
-}
-
-/// Generate a secure random token
-pub fn generate_token() -> String {
-    use rand::Rng;
-    let token: [u8; 32] = rand::thread_rng().gen();
-    base64::Engine::encode(&base64::engine::general_purpose::STANDARD, token)
 }
 
 #[cfg(test)]
@@ -373,13 +354,6 @@ mod tests {
         assert!(config.allowed_methods.contains(&"run".to_string()));
         assert!(!config.allowed_methods.contains(&"unlock".to_string()));
         assert!(!config.allowed_methods.contains(&"reveal".to_string()));
-    }
-
-    #[test]
-    fn test_generate_token() {
-        let token = generate_token();
-        assert!(!token.is_empty());
-        assert!(token.len() >= 40); // Base64 of 32 bytes
     }
 
     #[test]

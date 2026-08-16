@@ -154,34 +154,33 @@ pub enum Request {
     //   3. Any module that wants to ship a share-like UX over wormhole
     //      can reuse this same protocol
 
-    /// Encrypt a subset of secrets into a temp file using a fresh
-    /// ephemeral key. Returns the path to the encrypted file plus the
-    /// count of secrets sealed.
-    #[serde(rename = "share_seal")]
-    ShareSeal {
-        /// Specific secret names to share. Mutually exclusive with `all`.
-        #[serde(default)]
-        names: Option<Vec<String>>,
-        /// Share all secrets in the active session.
-        #[serde(default)]
-        all: Option<bool>,
-    },
+    // Revocable, time-limited grants of access to individual secrets.
+    // Cherry-picked from feature/15-critical-secret-reauth.
 
-    /// Decrypt a received share file and return only the secret NAMES
-    /// (no values). Used by the receive flow to show the user what's
-    /// coming before they confirm the import.
-    #[serde(rename = "share_inventory")]
-    ShareInventory {
-        path: String,
-    },
+    // Sets of secrets exported as a passphrase-encrypted file for
+    // batch transfer between deployments.
 
-    /// Decrypt a received share file and merge its contents into the
-    /// active session's vault. Returns the number of secrets imported.
-    /// The caller is responsible for shredding the file afterward.
-    #[serde(rename = "share_import")]
-    ShareImport {
-        path: String,
-    },
+
+
+
+    //
+    // Issue a short-lived in-memory grant covering the named secrets
+    // after a fresh WebAuthn step-up. Consumed one use at a time by
+    // handle_run when the substituted secret is critical. See
+    // docs/CRITICAL-SECRETS.md for the full spec.
+
+    //
+    // Re-encrypt the entire vault under a freshly generated master
+    // key. Requires active session + WebAuthn step-up (or dev-mode
+    // bypass). In hardened mode this atomically replaces the secrets
+    // file but leaves the master.key WebAuthn wrapper stale — the
+    // caller is responsible for immediately backing up the new key
+    // (scrt4 backup-key --save) or re-enrolling (scrt4 setup). The
+    // daemon returns the new master key in the response so the CLI
+    // can drive that follow-up. Full two-phase rotation that also
+    // re-wraps master.key under a fresh PRF is a future follow-up.
+    #[serde(rename = "rotate_vault")]
+    RotateVault,
 
     // ── Core: Encrypted-folder inventory (F027, F028) ──────────
     //
@@ -210,6 +209,11 @@ pub enum Request {
 
     #[serde(rename = "cleanup_encrypted")]
     CleanupEncrypted { remove_missing: bool },
+
+    // Encrypt TO a public share address instead of to a transport, so a
+    // blob is safe at rest and sender/recipient need not be online
+    // together. See issues #86 (design) and #87 (why `share` can't).
+
 }
 
 /// Response from daemon to client
@@ -240,11 +244,15 @@ pub enum ResponseData {
     Extended { remaining: i64 },
     BackupKey { key: String },
     WaState { configured: bool, enabled: bool, unlock_enabled: bool },
-    RelaySetup { url: String, session_id: String, wrapping_key: String, prf_salt_b64: String },
+    RelaySetup { url: String, session_id: String, wrapping_key: String, prf_salt_b64: String, qr: String },
     LocalUrl { url: String },
-    ShareSealed { path: String, count: usize },
-    ShareInventoried { names: Vec<String>, count: usize },
-    ShareImported { count: usize },
+    VaultRotated {
+        new_master_key_b64: String,
+        secret_count: usize,
+        /// True when the hardened master.key wrapper is now stale and
+        /// the caller must follow up with backup-key or setup.
+        wrapper_stale: bool,
+    },
 
     // ── Core: Encrypted-folder inventory (F027, F028) ──────────
     EncryptedRegistered { id: String, path: String },

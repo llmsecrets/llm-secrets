@@ -235,7 +235,6 @@ pub fn generate_prf_salt() -> [u8; 32] {
 // ── Relay-based WebAuthn flow via auth.llmsecrets.com ─────────────
 
 const AUTH_PAGE_BASE: &str = "https://auth.llmsecrets.com/auth.html";
-const RELAY_BASE: &str = "https://auth.llmsecrets.com/api/relay";
 
 /// Generate a random hex string of given byte length (internal)
 fn generate_hex(len: usize) -> String {
@@ -247,57 +246,6 @@ fn generate_hex(len: usize) -> String {
 /// Generate a random hex string of given byte length (public, for localhost module)
 pub fn generate_hex_public(len: usize) -> String {
     generate_hex(len)
-}
-
-/// Render a QR code as Unicode block characters to stdout
-fn print_qr_to_terminal(url: &str) {
-    use qrcode::QrCode;
-
-    let code = match QrCode::new(url.as_bytes()) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("Failed to generate QR code: {}", e);
-            eprintln!("Open this URL on your phone: {}", url);
-            return;
-        }
-    };
-
-    let width = code.width();
-    let data = code.into_colors();
-
-    // Use Unicode half-block characters for compact rendering
-    // Each character row encodes 2 QR rows using ▀ ▄ █ and space
-    let quiet = 2;
-    let total_w = width + quiet * 2;
-    let total_h = width + quiet * 2;
-
-    println!();
-    let mut row = 0;
-    while row < total_h {
-        print!("  "); // left margin
-        for col in 0..total_w {
-            let top_dark = if row >= quiet && row < quiet + width && col >= quiet && col < quiet + width {
-                data[(row - quiet) * width + (col - quiet)] == qrcode::Color::Dark
-            } else {
-                false
-            };
-            let bot_dark = if row + 1 >= quiet && row + 1 < quiet + width && col >= quiet && col < quiet + width {
-                data[(row + 1 - quiet) * width + (col - quiet)] == qrcode::Color::Dark
-            } else {
-                false
-            };
-
-            match (top_dark, bot_dark) {
-                (true, true)   => print!("█"),
-                (true, false)  => print!("▀"),
-                (false, true)  => print!("▄"),
-                (false, false) => print!(" "),
-            }
-        }
-        println!();
-        row += 2;
-    }
-    println!();
 }
 
 /// Decrypt an AES-256-GCM encrypted payload from the relay.
@@ -334,39 +282,6 @@ fn decrypt_relay_payload(encrypted_b64: &str, key_hex: &str) -> Result<serde_jso
         .map_err(|e| format!("Invalid JSON in decrypted payload: {}", e))
 }
 
-/// Poll the relay until the phone posts a result, or timeout.
-async fn poll_relay(session_id: &str, timeout_secs: u64) -> Result<String, String> {
-    let url = format!("{}/{}", RELAY_BASE, session_id);
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
-
-    loop {
-        if std::time::Instant::now() >= deadline {
-            return Err("Timed out waiting for phone authentication (120s)".into());
-        }
-
-        // Simple HTTP GET using a TCP connection
-        let response = tokio::task::spawn_blocking({
-            let url = url.clone();
-            move || {
-                std::process::Command::new("curl")
-                    .args(&["-sf", &url])
-                    .output()
-            }
-        }).await
-            .map_err(|e| format!("Poll task failed: {}", e))?
-            .map_err(|e| format!("curl failed: {}", e))?;
-
-        if response.status.success() {
-            let body = String::from_utf8(response.stdout)
-                .map_err(|e| format!("Invalid UTF-8 from relay: {}", e))?;
-            return Ok(body);
-        }
-
-        // Not ready yet, wait 1.5 seconds before polling again
-        tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
-    }
-}
-
 /// Parameters for a pending WebAuthn setup via relay
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RelaySetupParams {
@@ -376,33 +291,10 @@ pub struct RelaySetupParams {
     pub prf_salt_b64: String,
 }
 
-/// Percent-encode an action label for safe use as a URL query value.
-/// Keeps RFC 3986 unreserved chars as-is; everything else becomes `%XX`.
-/// This is used for the display-only `a=` param the auth page renders
-/// above the FIDO2 prompt — it is NOT part of the signed WebAuthn
-/// assertion, so treat the output as display guidance only.
-fn percent_encode_action(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for b in s.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9'
-            | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
-            _ => out.push_str(&format!("%{:02X}", b)),
-        }
-    }
-    out
-}
-
 /// Generate relay setup parameters for registration.
 /// Returns the URL for the QR code and session info.
 /// The CLI displays the QR code and polls the relay.
-///
-/// `action` is an optional short human-readable label (e.g. "register new
-/// passkey") rendered by auth.llmsecrets.com above the tap prompt so the
-/// user sees what their computer asked for. It is NOT part of the WebAuthn
-/// assertion's signed data — a compromised daemon could lie about it.
-/// It's a UX hint, not a cryptographic claim.
-pub fn generate_register_params(action: Option<&str>) -> Result<RelaySetupParams, String> {
+pub fn generate_register_params() -> Result<RelaySetupParams, String> {
     let engine = base64::engine::general_purpose::STANDARD;
     let prf_salt = generate_prf_salt();
     let session_id = generate_hex(20);
@@ -410,23 +302,14 @@ pub fn generate_register_params(action: Option<&str>) -> Result<RelaySetupParams
     let mut challenge_bytes = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut challenge_bytes);
 
-    let action_part = action
-        .map(|a| format!("&a={}", percent_encode_action(a)))
-        .unwrap_or_default();
-
-    // wrapping_key lives in the URL fragment (#k=...), not the query.
-    // Fragments are never sent to the server in HTTP requests, so the
-    // relay operator cannot log the key from request lines / access logs.
-    // See docs/AUTH-TRUST.md for the full trust model.
     let url = format!(
-        "{}?m=register&s={}&c={}&salt={}&rp={}{}#k={}",
+        "{}?m=register&s={}&c={}&salt={}&k={}&rp={}",
         AUTH_PAGE_BASE,
         session_id,
         engine.encode(challenge_bytes),
         engine.encode(&prf_salt),
-        "auth.llmsecrets.com",
-        action_part,
-        wrapping_key
+        wrapping_key,
+        "auth.llmsecrets.com"
     );
 
     Ok(RelaySetupParams {
@@ -438,13 +321,9 @@ pub fn generate_register_params(action: Option<&str>) -> Result<RelaySetupParams
 }
 
 /// Generate relay auth parameters for authentication (unlock).
-///
-/// See `generate_register_params` for the `action` label contract —
-/// display-only, not part of the signed assertion.
 pub fn generate_auth_params(
     credential: &WebAuthnCredential,
     salt: &[u8; 32],
-    action: Option<&str>,
 ) -> Result<RelaySetupParams, String> {
     let engine = base64::engine::general_purpose::STANDARD;
     let session_id = generate_hex(20);
@@ -452,22 +331,15 @@ pub fn generate_auth_params(
     let mut challenge_bytes = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut challenge_bytes);
 
-    let action_part = action
-        .map(|a| format!("&a={}", percent_encode_action(a)))
-        .unwrap_or_default();
-
-    // See the register flow above — wrapping_key moves to the URL
-    // fragment so the relay server never receives it in request URLs.
     let url = format!(
-        "{}?m=auth&s={}&c={}&salt={}&cred={}&rp={}{}#k={}",
+        "{}?m=auth&s={}&c={}&salt={}&cred={}&k={}&rp={}",
         AUTH_PAGE_BASE,
         session_id,
         engine.encode(challenge_bytes),
         engine.encode(salt),
         &credential.credential_id,
-        "auth.llmsecrets.com",
-        action_part,
-        wrapping_key
+        wrapping_key,
+        "auth.llmsecrets.com"
     );
 
     Ok(RelaySetupParams {
@@ -649,8 +521,6 @@ pub fn render_qr_string(url: &str) -> String {
     out
 }
 
-/// Relay base URL
-pub const RELAY_URL: &str = RELAY_BASE;
 
 // ── Tests ──────────────────────────────────────────────────────────
 
