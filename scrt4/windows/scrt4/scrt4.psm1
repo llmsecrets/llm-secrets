@@ -10,8 +10,38 @@
 
 #  Constants / init 
 
-$script:Version = '0.3.3'
+$script:Version = '0.4.0'
 
+# Release channels. The published manifest is generated at the same moment the
+# artifact is uploaded, so its version and hash can never drift from the zip
+# they describe.
+#
+# This is a table, not a URL. `upgrade` takes a channel NAME and looks it up
+# here; it will not accept a URL, because an arbitrary-URL upgrade is a remote
+# code execution primitive. See docs/RELEASE-CHANNELS.md.
+#
+# The public build carries only the `public` row. The private row is not
+# disabled there, it is absent -- a build cannot resolve what it does not
+# contain.
+$script:Channels = @{
+    public = 'https://dl.llmsecrets.com/scrt4'
+}
+$script:DefaultChannel = 'public'
+
+function Resolve-Scrt4Channel {
+    param([string]$Name)
+    if (-not $Name) { $Name = $script:DefaultChannel }
+    $Name = $Name.ToLowerInvariant()
+    if (-not $script:Channels.ContainsKey($Name)) {
+        throw "unknown channel '$Name'. Available: $(($script:Channels.Keys | Sort-Object) -join ', ')"
+    }
+    $script:Channels[$Name]
+}
+
+$script:UpdateManifestUrl = "$($script:Channels[$script:DefaultChannel])/version.json"
+$script:UpgradeOneLiner   = "irm $($script:Channels[$script:DefaultChannel]) | iex"
+# Point at your own release feed (an internal mirror, or a test server).
+if ($env:SCRT4_UPDATE_URL) { $script:UpdateManifestUrl = $env:SCRT4_UPDATE_URL }
 
 $script:DevMode = $false
 if ($env:SCRT4_DEV_MODE -eq '1' -or $env:SCRT4_DEV_MODE -eq 'true') {
@@ -1315,6 +1345,207 @@ function Invoke-CmdRecover {
 # The request is a plain GET of a static file. No identifiers are sent -- no
 # machine id, no vault contents, not even a version string.
 
+# Compare two dotted versions. Returns -1, 0, or 1.
+function Compare-Scrt4Version {
+    param([string]$A, [string]$B)
+    $pa = @(($A -replace '[^0-9.].*$', '') -split '\.' | ForEach-Object { [int]($_ -as [int]) })
+    $pb = @(($B -replace '[^0-9.].*$', '') -split '\.' | ForEach-Object { [int]($_ -as [int]) })
+    for ($i = 0; $i -lt [Math]::Max($pa.Count, $pb.Count); $i++) {
+        $x = if ($i -lt $pa.Count) { $pa[$i] } else { 0 }
+        $y = if ($i -lt $pb.Count) { $pb[$i] } else { 0 }
+        if ($x -gt $y) { return 1 }
+        if ($x -lt $y) { return -1 }
+    }
+    return 0
+}
+
+# Fetch the published manifest. Cached for 24h unless -Force.
+# Returns the manifest object, or $null if unavailable for any reason.
+function Get-Scrt4LatestRelease {
+    param([switch]$Force)
+
+    if ($env:SCRT4_NO_UPDATE_CHECK -eq '1') { return $null }
+
+    $cacheFile = Join-Path $script:ConfigDir 'update-check.json'
+    if (-not $Force -and (Test-Path $cacheFile)) {
+        try {
+            $cache = Get-Content -Raw $cacheFile | ConvertFrom-Json
+            $age = (Get-Date).ToUniversalTime() - [datetime]::Parse($cache.checked_at).ToUniversalTime()
+            if ($age.TotalHours -lt 24) { return $cache.release }
+        } catch { }   # a corrupt cache is not a reason to fail; just re-fetch
+    }
+
+    $release = $null
+    try {
+        $release = Invoke-RestMethod -Uri $script:UpdateManifestUrl -TimeoutSec 4 -UseBasicParsing
+    } catch {
+        return $null   # offline, blocked, server down -- silently give up
+    }
+    if (-not $release.version) { return $null }
+
+    try {
+        if (-not (Test-Path $script:ConfigDir)) {
+            New-Item -ItemType Directory -Force -Path $script:ConfigDir | Out-Null
+        }
+        $payload = [ordered]@{
+            checked_at = (Get-Date).ToUniversalTime().ToString('o')
+            release    = $release
+        }
+        [System.IO.File]::WriteAllText($cacheFile,
+            (ConvertTo-Json $payload -Depth 6), (New-Object System.Text.UTF8Encoding($false)))
+    } catch { }   # an unwritable cache just means we re-check next time
+
+    return $release
+}
+
+# One-line nudge, on stderr, when a newer version exists.
+function Show-Scrt4UpdateNotice {
+    if ($script:DevMode) { return }
+    if ($env:SCRT4_NO_UPDATE_CHECK -eq '1') { return }
+
+    $release = Get-Scrt4LatestRelease
+    if (-not $release) { return }
+    if ((Compare-Scrt4Version $release.version $script:Version) -le 0) { return }
+
+    # stderr, so a redirected stdout stays clean.
+    [Console]::Error.WriteLine('')
+    [Console]::Error.WriteLine("  scrt4 $($release.version) is available (you have $($script:Version)).")
+    if ($release.notes) { [Console]::Error.WriteLine("  $($release.notes)") }
+    [Console]::Error.WriteLine('  Upgrade:  scrt4 upgrade')
+}
+
+# scrt4 upgrade [--check] [--force]
+# scrt4 upgrade [--check] [--force] [--channel NAME]
+#
+# --channel names a row in $script:Channels. It is not a URL, and passing one
+# is an error: an upgrade that fetches from wherever it is told is a remote
+# code execution primitive. See docs/RELEASE-CHANNELS.md.
+function Invoke-CmdUpgrade {
+    param([string[]]$Rest)
+
+    $checkOnly = $Rest -contains '--check'
+    $force = $Rest -contains '--force'
+
+    $channel = $null
+    for ($i = 0; $i -lt $Rest.Count; $i++) {
+        if ($Rest[$i] -eq '--channel') {
+            if ($i + 1 -ge $Rest.Count) { Write-Err 'scrt4 upgrade: --channel needs a name'; return 1 }
+            $channel = $Rest[$i + 1]
+        } elseif ($Rest[$i] -like '--channel=*') {
+            $channel = $Rest[$i].Substring(10)
+        }
+    }
+    if ($channel -match '^[a-z]+://') {
+        Write-Err 'scrt4 upgrade: --channel takes a channel name, not a URL.'
+        Write-Host "  Available: $(($script:Channels.Keys | Sort-Object) -join ', ')"
+        return 1
+    }
+    try { $base = Resolve-Scrt4Channel $channel } catch {
+        Write-Err "scrt4 upgrade: $($_.Exception.Message)"
+        return 1
+    }
+    $script:UpdateManifestUrl = "$base/version.json"
+    $script:UpgradeOneLiner   = "irm $base | iex"
+
+    Write-Info 'Checking for updates...'
+    $release = Get-Scrt4LatestRelease -Force
+    if (-not $release) {
+        Write-Err "Could not reach $($script:UpdateManifestUrl)."
+        Write-Host '  You are offline, or the release server is unavailable. Nothing was changed.'
+        return 1
+    }
+
+    $cmp = Compare-Scrt4Version $release.version $script:Version
+    Write-Host "  installed: $($script:Version)"
+    Write-Host "  available: $($release.version)$(if ($release.released) { "  ($($release.released))" })"
+    if ($release.notes) { Write-Host "  $($release.notes)" }
+
+    if ($cmp -le 0 -and -not $force) {
+        Write-Ok 'Already up to date.'
+        return 0
+    }
+    if ($checkOnly) {
+        Write-Warn2 "Update available. Run: scrt4 upgrade"
+        return 0
+    }
+
+    if (-not $release.url -or -not $release.sha256) {
+        Write-Err 'The release manifest is missing a download url or checksum. Refusing to install.'
+        return 1
+    }
+
+    # The artifact must live on the host that served the manifest. Without
+    # this, a manifest can redirect the client to an arbitrary host, handing
+    # back exactly the capability the channel table exists to deny.
+    try {
+        $manifestHost = ([uri]$script:UpdateManifestUrl).Host
+        $artifactHost = ([uri]$release.url).Host
+    } catch {
+        Write-Err 'The release manifest has an unparseable url. Refusing to install.'
+        return 1
+    }
+    if ($artifactHost -ne $manifestHost) {
+        Write-Err 'The release manifest points at a different host. Refusing to install.'
+        Write-Host "  manifest $manifestHost"
+        Write-Host "  artifact $artifactHost"
+        return 1
+    }
+
+    $tmp = Join-Path $env:TEMP ('scrt4-upgrade-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+    try {
+        $zip = Join-Path $tmp 'scrt4.zip'
+        Write-Info "Downloading $($release.version)..."
+        Invoke-WebRequest $release.url -OutFile $zip -UseBasicParsing -TimeoutSec 120
+
+        # Verify BEFORE unpacking: this archive is about to be executed.
+        $got = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+        if ($got -ne ([string]$release.sha256).ToLower()) {
+            Write-Err 'CHECKSUM MISMATCH -- refusing to install.'
+            Write-Host "  expected $($release.sha256)"
+            Write-Host "  got      $got"
+            return 1
+        }
+        Write-Ok "  checksum ok  $got"
+
+        Expand-Archive -Path $zip -DestinationPath (Join-Path $tmp 'pkg') -Force
+        $installer = Join-Path $tmp 'pkg\install.ps1'
+        if (-not (Test-Path $installer)) {
+            Write-Err 'The downloaded bundle has no install.ps1. Refusing to continue.'
+            return 1
+        }
+
+        Write-Info 'Installing...'
+        # Run the packaged installer through a CHILD PowerShell with the
+        # execution policy bypassed -- same reason as the bootstrap
+        # installer: install.ps1 is a FILE, and running a .ps1 file is
+        # governed by execution policy, which defaults to Restricted on
+        # Windows client editions. A bare `& $installer` dies with
+        # "running scripts is disabled on this system" (and Expand-Archive
+        # marks the file with the Mark-of-the-Web too). -ExecutionPolicy
+        # Bypass on a child process clears both; keeping it a real -File
+        # call preserves the installer's $PSScriptRoot. Re-invoke the same
+        # host so it works under Windows PowerShell 5.1 and PowerShell 7.
+        $psExe = (Get-Process -Id $PID).Path
+        if (-not $psExe) { $psExe = 'powershell.exe' }
+        & $psExe -NoProfile -ExecutionPolicy Bypass -File $installer
+        if ($LASTEXITCODE -ne 0) {
+            Write-Err "Installer exited with code $LASTEXITCODE. Your existing install was not replaced."
+            return 1
+        }
+        Write-Host ''
+        Write-Ok "scrt4 is now $($release.version)."
+        Write-Warn2 'Open a new terminal so the updated client is loaded.'
+        return 0
+    } catch {
+        Write-Err "Upgrade failed: $($_.Exception.Message)"
+        Write-Host '  Your existing install was not modified.'
+        return 1
+    } finally {
+        Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
+    }
+}
+
 function Invoke-CmdDaemon {
     param([string[]]$Rest)
 
@@ -1355,6 +1586,8 @@ CORE COMMANDS:
     backup-key [--save DIR]      Show or save the master key
     recover FILE                 Recover a master key from an encrypted backup
     backup-guide        Show backup & recovery guide
+    upgrade [--check]   Update scrt4 to the latest release (verifies the
+                        checksum before installing; --check only reports)
 
 GLOBAL FLAGS:
     --cli               Force terminal mode (skip GUI dialogs)
@@ -1512,6 +1745,7 @@ function Invoke-Scrt4 {
             'backup-key'   { return (Invoke-CmdBackupKey -Rest $restArr) }
             'recover'      { return (Invoke-CmdRecover -Rest $restArr) }
             'backup-guide' { return (Invoke-CmdBackupGuide) }
+            'upgrade'      { return (Invoke-CmdUpgrade -Rest $restArr) }
             default {
                 if ($script:ModuleCommands.ContainsKey($rawCmd)) {
                     return (& $script:ModuleCommands[$rawCmd] $restArr)
@@ -1525,6 +1759,7 @@ function Invoke-Scrt4 {
         # `finally` still runs on the `return`s above, so the nudge lands after
         # the command's own output without disturbing its exit code.
         if ($nudgeable -contains $rawCmd) {
+            try { Show-Scrt4UpdateNotice } catch { }
         }
     }
 }
