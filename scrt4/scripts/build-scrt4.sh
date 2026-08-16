@@ -154,7 +154,7 @@ for mod in "${MODULES[@]}"; do
         exit 4
     fi
     if [ "$declared_tcb" = "true" ]; then
-        printf 'build-scrt4: WARN — module %s declares tcb: true. This module is in the trusted computing base — make sure it is in docs/TCB.md and has a security review.\n' "$mod" >&2
+        printf 'build-scrt4: WARN — module %s declares tcb: true. This module is in the trusted computing base and requires a security review.\n' "$mod" >&2
     elif [ "$declared_tcb" != "false" ]; then
         echo "build-scrt4: ERROR — $mod_file has invalid tcb value: $declared_tcb (expected true|false)" >&2
         exit 4
