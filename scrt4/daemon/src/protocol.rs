@@ -146,6 +146,10 @@ pub enum Request {
     SetupLocalComplete,
 
 
+
+
+
+
     //
     // Re-encrypt the entire vault under a freshly generated master
     // key. Requires active session + WebAuthn step-up (or dev-mode
