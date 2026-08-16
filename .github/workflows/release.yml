@@ -42,14 +42,19 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # ubuntu-22.04, deliberately, not ubuntu-latest. A binary links
+          # against the glibc it was built on and refuses to start on
+          # anything older, so building on the newest runner silently drops
+          # every distro that is not equally new. 22.04 sets the floor at
+          # glibc 2.35, which covers Ubuntu 22.04+, Debian 12+ and RHEL 9+.
           - os_label: linux
             arch: x86_64
-            runner: ubuntu-latest
+            runner: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             cross: false
           - os_label: linux
             arch: aarch64
-            runner: ubuntu-latest
+            runner: ubuntu-22.04
             target: aarch64-unknown-linux-gnu
             cross: true
           - os_label: darwin
@@ -203,6 +208,36 @@ jobs:
           cd out
           sha256sum * > SHA256SUMS
           cat SHA256SUMS
+
+      # A Linux binary refuses to start on any glibc older than the one it was
+      # built against, and the failure is a crash loop at install time, not a
+      # build error. Running it in CI does not catch this: the runner that
+      # verifies is as new as the runner that built, so the check passes and
+      # the user's machine is what discovers the problem.
+      #
+      # v0.4.1 shipped needing GLIBC_2.39 and crash-looped on Ubuntu 22.04.
+      # This reads the required symbol versions straight out of the ELF, so it
+      # holds regardless of which runner it happens to execute on.
+      - name: Enforce the glibc floor
+        run: |
+          set -euo pipefail
+          FLOOR_MAJOR=2
+          FLOOR_MINOR=35
+          fail=0
+          for f in out/scrt4-daemon-linux-*; do
+            # grep -a rather than strings: no binutils dependency, and the
+            # symbol sits inside a longer line, so this must not be anchored.
+            max=$(LC_ALL=C grep -aoE 'GLIBC_2\.[0-9]+' "$f" | sort -uV | tail -1)
+            [ -n "$max" ] || { echo "$f: no GLIBC symbols found"; fail=1; continue; }
+            minor=${max#GLIBC_2.}
+            if [ "$minor" -gt "$FLOOR_MINOR" ]; then
+              echo "FAIL $f requires $max, floor is GLIBC_${FLOOR_MAJOR}.${FLOOR_MINOR}"
+              fail=1
+            else
+              echo "ok   $(basename "$f") requires $max"
+            fi
+          done
+          exit $fail
 
       # Distribution is served from the llmsecrets domain, not from here.
       # This job's only output is a verified artifact set to publish there;
