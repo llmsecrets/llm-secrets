@@ -1,229 +1,146 @@
-# LLM Secrets
+# LLM Secrets — scrt4
 
-> **Protect your `.env` secrets from AI coding assistants.** Claude, Cursor, and other agents can *use* your secrets without ever *seeing* them.
+**Your AI coding agent can use your secrets without ever seeing them.**
 
-[![Downloads](https://img.shields.io/badge/Downloads-llmsecrets.com-2563eb)](https://llmsecrets.com/downloads)
-[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-green)](LICENSE)
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/llmsecrets/llm-secrets)
+When an agent reads your `.env`, every API key and database password lands in
+its context window. scrt4 keeps the values out of that window entirely: the
+agent writes `$env[STRIPE_SECRET_KEY]`, and the value is injected directly into
+the subprocess environment by a daemon the agent cannot read.
+
+```
+✓ the agent sees:     $env[STRIPE_SECRET_KEY]
+✗ the agent never sees: sk_live_...
+```
+
+The vault is encrypted with AES-256-GCM under a key derived from your hardware
+authenticator via the WebAuthn PRF extension (CTAP2 `hmac-secret`). No password.
+No server. The key is re-derived each session and never leaves the device.
 
 ---
 
-## The Problem
+## Architecture
 
-When Claude Code reads your `.env` file, your API keys, database passwords, and private keys land in the AI's context window — and every prompt cache, log line, and error report that follows.
+Three layers, deliberately separated:
 
-```
-[!] Claude Code just read your .env:
-    PRIVATE_KEY=0x7f3a8b2c...
-    STRIPE_SECRET_KEY=sk_live_...
-    DATABASE_URL=postgres://admin:password@...
-```
+| Layer | What it is | Where |
+|---|---|---|
+| **Crypto core** | The Rust daemon. Owns the vault, runs the auth ceremony, injects secrets into subprocesses. | `scrt4/daemon/src/` |
+| **OS layer** | A thin client per platform speaking JSON-RPC to the daemon over a Unix socket or a Windows named pipe. | `scrt4/daemon/bin/` (bash), `scrt4/windows/` (PowerShell) |
+| **Modules** | Optional feature surface. **Not part of this repository.** | — |
 
-## The Solution
-
-LLM Secrets holds your secrets in an encrypted vault. The AI writes commands with placeholder names; the values are substituted at runtime inside an isolated subprocess and scrubbed from stdout before anything returns to the model.
-
-```
-✓ Claude sees:     scrt4 run 'curl -H "Authorization: Bearer $env[API_KEY]" ...'
-✗ Claude sees NOT: the actual bearer token
-```
-
----
-
-## scrt4 — the current generation
-
-The active code lives under [`scrt4/`](./scrt4). It is AGPL-3.0, hardware-bound, under 10 MB end-to-end, and runs the same way on macOS, Linux, and WSL.
+Clients never touch vault crypto. Everything security-relevant happens in the
+daemon, so the surface you need to trust is the crypto core alone.
 
 ### How the key works
 
-scrt4 derives your vault key from your hardware authenticator via the WebAuthn PRF extension (CTAP2 `hmac-secret`). The key is re-derived every session and never leaves the device.
-
 Supported authenticators:
 
-- **YubiKey 5 series** — firmware 5.2.3+ (YubiKey 4 / NEO do not support `hmac-secret`)
+- **YubiKey 5 series** — firmware 5.2.3+ (YubiKey 4 / NEO lack `hmac-secret`)
 - **Trezor Safe 3 / Safe 5 / Model T** on recent firmware
 - **OnlyKey**
 - **Phone passkeys** via caBLE — iPhone and Android
-- **Apple passkeys, Bitwarden, 1Password, Google Password Manager** — any software authenticator that speaks PRF
+- **Windows Hello**, and any software authenticator that speaks PRF — Apple
+  passkeys, Bitwarden, 1Password, Google Password Manager
 
-No passwords. No TOTP. Lose the authenticator → see the recovery section below.
+No passwords, no TOTP. Lose the authenticator and you need your key backup —
+see [Recovery](#recovery).
 
 ### How the vault works
 
 - **AES-256-GCM** authenticated encryption at rest
-- Decrypted only in daemon memory during an active session; never written unencrypted
-- The daemon scrubs every stored value from subprocess stdout before returning it to the calling agent
-- `scrt4 view` opens a Zenity GUI dialog — values render in the OS window system where a CLI agent cannot read them
-
-### Install
-
-```bash
-curl -fsSL https://install.llmsecrets.com/native | sh
-```
-
-Auto-detects OS and architecture, pulls SHA256-verified binaries from GitHub Releases, and installs a systemd user unit (Linux) or launchd plist (macOS). No Docker required. Full install options and per-OS details at **<https://llmsecrets.com/downloads>**.
-
-### Use
-
-```bash
-scrt4 setup                        # one-time FIDO2 enrollment
-scrt4 unlock                       # default 20-hour session
-scrt4 import path/to/.env          # pull in an existing .env file
-scrt4 add API_KEY=sk-live-...      # or add one at a time
-scrt4 list                         # see names (never values)
-scrt4 run 'cmd $env[NAME]'         # agent-safe execution
-scrt4 view                         # GUI-only view/edit
-scrt4 verify-self                  # check binary against the published manifest
-scrt4 backup-key --save /usb/path  # export an encrypted recovery file
-scrt4 llm                          # emit an llms.txt-style capability dump
-scrt4 help                         # full command reference
-```
-
-See [`scrt4/README.md`](./scrt4/README.md) for the complete command reference, [`scrt4/ARCHITECTURE.md`](./scrt4/ARCHITECTURE.md) for the daemon / module / TCB split, and [`scrt4/SECURITY.md`](./scrt4/SECURITY.md) for the threat model.
-
-### Client-side encrypted Drive backup (cloud-crypt)
-
-Losing the authenticator without a backup means losing the vault. The recommended backup path is **your own Google Drive, client-side encrypted**:
-
-- **AES-256-GCM runs locally before upload.** Drive only ever receives `.scrt4` ciphertext — bytes it cannot decrypt.
-- **Your master key never leaves the device.** The storage provider sees filenames and sizes; everything else is opaque.
-- **Bring your own Drive.** OAuth is scoped to `drive.file` — cloud-crypt can only read/write files it creates itself, nothing else in your account.
-- **No server side.** There is no llmsecrets.com account, no hosted vault, no "forgot your key?" flow. Drive is your backend because Drive is yours.
-
-Setup is three commands after `scrt4 unlock`:
-
-```bash
-scrt4 cloud-crypt auth setup --from-gws        # one-time Drive-scoped OAuth
-scrt4 backup-key --save /media/usb             # password-protected master-key export
-scrt4 cloud-crypt encrypt-and-push ~/.scrt4/vault.enc
-```
-
-Restoring on a new machine: install scrt4, `scrt4 setup` to enroll a new authenticator, `scrt4 recover <backup-file>` to re-import the master key, then `scrt4 cloud-crypt pull-and-decrypt <driveId>` to pull the encrypted vault back down.
-
-The module ships in the native installer by default. Works with any Google account (personal, Workspace) and with software authenticators too — you don't need a hardware key to use cloud-crypt, but you do need one to unlock the vault itself. Full walkthrough: [`scrt4/modules/cloud-crypt/README.md`](./scrt4) and the [docs site](https://docs.llmsecrets.com/#cloud-crypt).
-
-### Modules
-
-Modules extend scrt4 without expanding the trusted computing base. The native installer ships `cloud-crypt`, `encrypt-folder`, and `import-env` by default; the rest are explicit opt-in via `--module NAME`.
-
-- **`cloud-crypt`** — client-side encrypted Google Drive backup (see section above).
-- **`encrypt-folder`** — encrypt any directory to a standalone `.scrt4` archive using the same vault key.
-- **`import-env`** — parse an existing `.env` (including `export KEY=value`, quoted values, and `#` comments) into the vault.
-- **Additional modules** (`github`, `gcp`, `stripe`, `dns`, …) — whitelisted in [`scrt4/install/modules-whitelist.json`](./scrt4/install/modules-whitelist.json) and SHA256-verified at install time. Run `scrt4 modules list` to see what's loaded in your install.
-
-### Recovery
-
-- `scrt4 backup-key --save <dir>` — writes a password-protected export of the master key. Store it on a USB you trust or in your password manager.
-- `scrt4 cloud-crypt encrypt-and-push ~/.scrt4/vault.enc` — pushes the encrypted vault to your Google Drive (see [Client-side encrypted Drive backup](#client-side-encrypted-drive-backup-cloud-crypt)). Restoring requires both the backup key *and* your Drive access.
-- No authenticator + no backup = no recovery, by design. There is no server-side reset because there is no server-side anything.
-
-### Uninstall
-
-```bash
-curl -fsSL https://install.llmsecrets.com/uninstall | sh
-```
-
-Removes the daemon, CLI, and session data. The encrypted vault at `~/.scrt4/` stays on disk until you delete it.
+- Decrypted only in daemon memory during an active session, never written back
+  in the clear
+- Every stored value is scrubbed from subprocess output before it is returned
+  to the calling agent
+- `scrt4 view` renders values in an OS window a CLI agent cannot read
 
 ---
 
-## What this buys you
+## Install
 
-One month of Claude Code sessions with scrt running, recorded from the author's own workstation:
+**Build from source.** There is no binary distribution channel for this
+repository yet — see [BUILD.md](./BUILD.md).
 
-| | Count |
-|---|---|
-| Secret injections (`$env[NAME]` substitutions) | **1,508** |
-| Distinct secrets used across deployments, blockchain, infra, APIs | 24 |
-| Secret values that reached the model's context | **0** |
-| Secret values that landed in shell history or logs | **0** |
+That is a deliberate statement of fact rather than a policy: binaries exist for
+internal use, but they are produced from a private tree, and pointing you at
+them would mean shipping you something whose source you cannot check against
+what is here. When a channel exists that serves exactly this code, it will be
+documented here and nowhere else.
 
-The trust equation is simple: if the AI cannot see a value, it cannot leak a value. Because the security model is sound, work an operator would otherwise never delegate — mainnet contract deploys, Vercel production pushes, DocuSeal template swaps on a live server — becomes automatable.
-
----
-
-## Deprecated: the original LLM Secrets stack
-
-The top-level directories below predate scrt4 and are preserved for users who haven't migrated yet. They are **no longer actively developed.** New installs should use scrt4.
-
-| Directory | What it is | Status |
-|---|---|---|
-| [`cli/`](./cli) | PowerShell CLI for Windows (`scrt.ps1`) | Deprecated — use `scrt4` |
-| [`crypto-core/`](./crypto-core) | Windows Hello AES-256-CBC crypto module | Deprecated — scrt4 uses FIDO2 + AES-256-GCM |
-| [`desktop-app/`](./desktop-app) | Electron app (TOTP + license-gated) | Deprecated — scrt4 is daemon + CLI |
-| [`wsl-daemon/`](./wsl-daemon) | Original WSL bridge | Deprecated — scrt4 ships its own daemon |
-
-A full pre-merge snapshot of just these legacy components lives on the [`archive/legacy-stack`](https://github.com/llmsecrets/llm-secrets/tree/archive/legacy-stack) branch.
-
-**Why replaced?**
-1. **FIDO2 > Windows Hello + TOTP.** scrt4's key is hardware-bound via `hmac-secret` and portable across devices. The original stack relied on platform-specific biometric APIs and a TOTP secondary.
-2. **AGPL everywhere.** Both scrt4 and the legacy stack are now AGPL-3.0, but scrt4 was built open from day one with no license gating in the install path.
-3. **Cross-platform parity.** scrt4 runs the same way on macOS, Linux, and WSL. The original stack had divergent behavior across platforms.
-
-We'll keep the legacy directories in `main` indefinitely so existing users can self-host and migrate on their own schedule. Only security fixes are accepted against them.
+> **Windows:** builds you compile yourself are unsigned. SmartScreen may warn,
+> and Smart App Control — if enabled — will block the binary outright with
+> "An Application Control policy has blocked this file" (Event Viewer:
+> `Microsoft-Windows-CodeIntegrity/Operational`, IDs 3033/3077). Code-signing
+> is in progress. Until then, a debug build passes where a release build does
+> not, and SAC can be disabled in Windows Security → App & browser control.
 
 ---
 
-## Trust & verification
-
-- **Downloads page** — <https://llmsecrets.com/downloads> lists every release with per-platform install commands and the current published SHA256 checksums.
-- **Two-hosts, one-hash for the installer script** — the same `scrt4-native.sh.sha256` is served from `install.llmsecrets.com/native.sha256` and committed at [`scrt4/install/scrt4-native.sh.sha256`](./scrt4/install/scrt4-native.sh.sha256). Both must match before piping to `sh`; tampering either source alone fails the check.
-- **Release manifest** — <https://install.llmsecrets.com/releases/latest.txt> points to the current tag; each tag directory has a `SHA256SUMS` over every daemon binary and the bash CLI.
-- **Self-verification** — a running scrt4 can check its own bytes against the published manifest with `scrt4 verify-self`.
-- **Reproducible layout** — the scrt4 working tree (source, bash modules, install scripts, docs) is about 1.5 MB. "Under 10 MB" is the conservative public claim; you can audit the CLI (~2,800 lines of core bash + ~900 LoC per module) and the daemon (Rust, <2k LoC) line by line.
-
-### Checksums
-
-Current release: **`v0.2.14-community`** ([live pointer](https://install.llmsecrets.com/releases/latest.txt))
-
-Installer script (served at `install.llmsecrets.com/native`):
-
-```
-21402a9cf89078680a1530094d216cfa6563c7a03480754da1731ed0ab9cf5cc  scrt4-native.sh
-```
-
-Release binaries (served at `install.llmsecrets.com/releases/v0.2.14-community/SHA256SUMS`):
-
-```
-92b187282dda56e5a2afda9536cee11f3331e688aa8dd210b10b4ae80f076e01  scrt4-daemon-darwin-aarch64
-e78c5b8c9d2493e6f86f4f518f6cc8080c5c45fd4a0582c4e85d1554d8607666  scrt4-daemon-linux-aarch64
-5bd23e4b4ce53adea302202b55badd416d30ad9cfd535a4704e0ff729f25f16b  scrt4-daemon-linux-x86_64
-bd8973080414d3e9388feb1d492da968253475a41f985377127902195401e6fb  scrt4
-```
-
-These hashes bump every release. The authoritative live sources:
-
-| What | URL |
-|---|---|
-| Installer hash (host 1) | `https://install.llmsecrets.com/native.sha256` |
-| Installer hash (host 2) | `https://raw.githubusercontent.com/llmsecrets/llm-secrets/main/scrt4/install/scrt4-native.sh.sha256` |
-| Current release tag | `https://install.llmsecrets.com/releases/latest.txt` |
-| Release binaries manifest | `https://install.llmsecrets.com/releases/<tag>/SHA256SUMS` |
-
-Verify the installer before running it:
+## Use
 
 ```bash
-EXPECTED=$(curl -fsSL https://install.llmsecrets.com/native.sha256)
-PUBLISHED=$(curl -fsSL https://raw.githubusercontent.com/llmsecrets/llm-secrets/main/scrt4/install/scrt4-native.sh.sha256)
-ACTUAL=$(curl -fsSL https://install.llmsecrets.com/native | sha256sum | awk '{print $1}')
-[ "$EXPECTED" = "$PUBLISHED" ] && [ "$EXPECTED" = "$ACTUAL" ] && echo OK
+scrt4 setup                        # one-time authenticator enrollment
+scrt4 unlock                       # start a session (default 20 hours)
+scrt4 add STRIPE_SECRET_KEY=sk_live_...
+scrt4 list                         # names only, never values
+scrt4 run 'deploy.sh --key $env[STRIPE_SECRET_KEY]'
+scrt4 view                         # GUI editor, values never hit stdout
+scrt4 lock                         # end the session
 ```
 
-All three must match. Any divergence = stop.
+`scrt4 run` is the point of the whole thing. The placeholder is substituted
+inside the daemon, after your shell and after the agent's context.
 
-### AI-assisted audit
+---
 
-Don't want to read 2,000 lines of Rust yourself? [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/llmsecrets/llm-secrets) indexes this repo and answers questions like *"Does the daemon ever write secret values to disk?"* or *"How is the master key derived?"* against the actual source.
+## Recovery
+
+There is no server-side reset, because there is no server side. Two things
+recover a vault, and you need both:
+
+1. A key backup — `scrt4 backup-key --save <dir>`
+2. The recovery password you set when creating it
+
+Take the backup now, and store it somewhere your authenticator is not.
+
+[`disaster-recovery/`](./disaster-recovery) recovers a vault **without scrt4
+installed at all** — standalone scripts for Unix and Windows, the backup format
+documented field by field, and instructions for verifying your backup actually
+works before you need it.
+
+---
+
+## Security
+
+- Threat model and trust boundaries: [`scrt4/SECURITY.md`](./scrt4/SECURITY.md)
+- Design rationale: [`scrt4/daemon/DESIGN.md`](./scrt4/daemon/DESIGN.md)
+
+Report vulnerabilities privately via GitHub Security Advisories on this
+repository rather than a public issue.
+
+---
+
+## Status
+
+scrt4 is alpha. The cryptography is conservative and the audited crates are
+named in `Cargo.toml`, but the integration around them is young, the Windows
+port is the newest part, and it has not had an external audit.
+
+Use it for development secrets. Think carefully before you use it for anything
+whose loss you could not absorb — and if you do, take a key backup first.
 
 ---
 
 ## Contributing
 
-- Issues and PRs against [`scrt4/`](./scrt4) are welcome.
-- Security issues: email `security@llmsecrets.com` or open a private security advisory on this repo. Do not file public issues for vulnerabilities.
-- The legacy top-level directories (`cli/`, `desktop-app/`, etc.) are in maintenance mode — only security patches are accepted.
-- There is no external audit yet. One is planned for 2026; community review is explicitly invited in the meantime.
+Issues and pull requests welcome. Two things worth knowing before you open one:
+
+- **Keep the daemon small.** Anything optional belongs in a client, not in the
+  crypto core. A PR that grows `daemon/src/` to add a convenience feature will
+  be asked to move it.
+- **No new secret names in code or docs.** Configuration reads from the vault
+  by name at runtime; nothing should hard-code what those names are.
 
 ## License
 
-AGPL-3.0. See [`LICENSE`](./LICENSE) and [`legal/SOFTWARE-LICENSE.md`](./legal/SOFTWARE-LICENSE.md) for the full text and commercial-use notes.
+AGPL-3.0. See [LICENSE](./LICENSE).
