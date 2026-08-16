@@ -858,8 +858,6 @@ CORE COMMANDS:
                         current directory unless --cwd is given.
     view [--cli]        View secrets (GUI default, --cli for terminal)
     rotate              Rotate the vault master key (re-encrypts all secrets)
-    share [--all] [NAME ...]     Share secrets via Magic Wormhole
-    receive [--code CODE]        Receive shared secrets
     backup-vault [--local DIR]   Tar the vault directory into a dated archive
     backup-key [--save DIR]      Show or save the master key
     recover FILE                 Recover a master key from an encrypted backup
@@ -881,7 +879,7 @@ EOF
     for i in "${!_SCRT4_CMDS[@]}"; do
         local handler="${_SCRT4_HANDLERS[$i]}"
         case "$handler" in
-            cmd_help|cmd_status|cmd_setup|cmd_unlock|cmd_extend|cmd_logout|cmd_list|cmd_add|cmd_run|cmd_view|cmd_rotate|cmd_list_encrypted|cmd_cleanup_encrypted|cmd_daemon|cmd_backup_vault|cmd_backup_key|cmd_recover|cmd_recover_key|cmd_backup_guide|cmd_share|cmd_receive|cmd_verify_self)
+            cmd_help|cmd_status|cmd_setup|cmd_unlock|cmd_extend|cmd_logout|cmd_list|cmd_add|cmd_run|cmd_view|cmd_rotate|cmd_list_encrypted|cmd_cleanup_encrypted|cmd_daemon|cmd_backup_vault|cmd_backup_key|cmd_recover|cmd_recover_key|cmd_backup_guide|cmd_verify_self)
                 # Core handlers — already shown in the CORE COMMANDS block above.
                 continue ;;
         esac
@@ -1154,230 +1152,7 @@ cmd_rotate() {
 #   - lock    (alias, same behaviour)
 #   - clear   (alias, same behaviour — listed in the v0.1.0 menu)
 cmd_logout() {
-    send_request '{"method":"logout"}'
-}
-
-# cmd_share [--all] [--cli] [--relay URL] [SECRET ...]
-#
-# Core command (touches secret values at rest during seal). Sends one
-# or more secrets via Magic Wormhole. The daemon-side handlers
-# (share_seal, share_inventory, share_import) wrap the payload in
-# AES-256-GCM under an ephemeral key that rides in the same blob —
-# so the wormhole relay operator cannot read the secrets even if
-# they log everything. The wormhole transport itself is end-to-end
-# encrypted via SPAKE2; scrt4's layer is defense-in-depth.
-#
-# Ported from the share module (2026-04-13). Classification flipped
-# from Module to Core because the command operates on secret values
-# in their sealed-for-transfer form — that's vault-adjacent crypto
-# bookkeeping that belongs alongside backup-vault/backup-key/recover
-# in Core. The wormhole transport orchestration stays in bash
-# because the crypto itself lives in the daemon (Rust TCB).
-cmd_share() {
-    ensure_unlocked || return 1
-
-    # WebAuthn step-up: share exfiltrates secret values over the network
-    # (even sealed, they're secret-shaped on the wire). A stolen session
-    # token should not be enough — require a fresh authenticator tap.
-    # Mirrors _share_send in the v0.1.0 monolith (issue #35).
-    _wa_gate || return 1
-
-    local share_all=false
-    local relay_url=""
-    local -a names=()
-    while [ $# -gt 0 ]; do
-        case "$1" in
-            --all)   share_all=true; shift ;;
-            --cli)   FORCE_CLI=true; shift ;;
-            --relay) relay_url="${2:-}"; shift 2 ;;
-            *)       names+=("$1"); shift ;;
-        esac
-    done
-
-    if [ "$share_all" = false ] && [ "${#names[@]}" -eq 0 ]; then
-        echo -e "${RED}Usage: scrt4 share [--all] [--relay URL] [NAME ...]${NC}" >&2
-        return 1
-    fi
-
-    # Seal the requested secrets into an ephemeral file via the daemon.
-    local req
-    if [ "$share_all" = true ]; then
-        req='{"method":"share_seal","params":{"all":true}}'
-    else
-        local names_json
-        names_json=$(printf '%s\n' "${names[@]}" | jq -R . | jq -s .)
-        req=$(jq -nc --argjson names "$names_json" '{method:"share_seal",params:{names:$names}}')
-    fi
-
-    local seal_resp
-    seal_resp=$(send_request "$req")
-    local seal_ok
-    seal_ok=$(echo "$seal_resp" | jq -r '.success // false')
-    if [ "$seal_ok" != "true" ]; then
-        echo -e "${RED}Seal failed: $(echo "$seal_resp" | jq -r '.error // "unknown"')${NC}" >&2
-        return 1
-    fi
-
-    local encrypted_file share_count
-    encrypted_file=$(echo "$seal_resp" | jq -r '.data.path')
-    share_count=$(echo "$seal_resp" | jq -r '.data.count')
-
-    echo -e "${GREEN}Sealed ${share_count} secret(s). Starting wormhole transfer...${NC}"
-    if [ -z "$relay_url" ]; then
-        echo -e "${YELLOW}Note: Using public relay (relay.magic-wormhole.io). Your IP is visible to the relay operator.${NC}"
-    fi
-
-    # Run wormhole send, rewriting the "wormhole receive CODE" hint to
-    # "scrt4 receive --code CODE" so the receiver knows which CLI to
-    # use. Preserves PR #55's fix verbatim.
-    local -a wormhole_args=("send" "$encrypted_file")
-    if [ -n "$relay_url" ]; then
-        wormhole_args=("--relay-url" "$relay_url" "send" "$encrypted_file")
-    fi
-
-    wormhole "${wormhole_args[@]}" 2> >(awk '
-        /^On the other computer, please run:/ {
-            print "On the other computer, run:"
-            fflush()
-            next
-        }
-        /^wormhole receive / {
-            print "  scrt4 receive --code " $NF
-            fflush()
-            next
-        }
-        { print; fflush() }
-    ' >&2)
-    local wh_rc=$?
-
-    # Shred + remove the ephemeral seal file. Best effort — the daemon
-    # also cleans up on its end on the next share_seal or after a
-    # reasonable timeout. dd+sync+rm here is defense-in-depth.
-    if [ -f "$encrypted_file" ]; then
-        local fsize
-        fsize=$(stat -c%s "$encrypted_file" 2>/dev/null || stat -f%z "$encrypted_file" 2>/dev/null || echo 0)
-        if [ "$fsize" -gt 0 ] 2>/dev/null; then
-            dd if=/dev/urandom of="$encrypted_file" bs=1 count="$fsize" conv=notrunc 2>/dev/null || true
-            sync "$encrypted_file" 2>/dev/null || true
-        fi
-        rm -f "$encrypted_file"
-    fi
-
-    if [ "$wh_rc" -ne 0 ]; then
-        echo -e "${RED}Wormhole transfer failed (exit $wh_rc)${NC}" >&2
-        return 1
-    fi
-    echo -e "${GREEN}Transfer complete.${NC}"
-}
-
-# cmd_receive [--code CODE] [--cli] [--relay URL]
-#
-# Receives a wormhole transfer and imports the secrets into the local
-# vault. Core command (touches the vault via share_import). Dev
-# prompt fallback is text-mode; hardened shows a zenity confirmation.
-# _has_gui guards the headless-container silent-cancel bug fixed in
-# PR #55 — dev distribution always uses the text prompt.
-cmd_receive() {
-    ensure_unlocked || return 1
-
-    local wormhole_code=""
-    local relay_url=""
-    while [ $# -gt 0 ]; do
-        case "$1" in
-            --code)  wormhole_code="${2:-}"; shift 2 ;;
-            --cli)   FORCE_CLI=true; shift ;;
-            --relay) relay_url="${2:-}"; shift 2 ;;
-            *)       wormhole_code="$1"; shift ;;
-        esac
-    done
-
-    if [ -z "$wormhole_code" ]; then
-        if [ "$FORCE_CLI" = false ] && _has_gui; then
-            wormhole_code=$(zenity --entry --title="scrt4 — Receive" \
-                --text="Enter the wormhole code you were given:" 2>/dev/null) || true
-        else
-            echo -n "Wormhole code: "
-            read -r wormhole_code
-        fi
-    fi
-
-    if [ -z "$wormhole_code" ]; then
-        echo -e "${RED}No code given. Cancelled.${NC}" >&2
-        return 1
-    fi
-
-    local recv_file
-    recv_file="$(mktemp -t scrt4-share-recv.XXXXXX.bin)"
-
-    local -a wormhole_args=("receive" "--accept-file" "-o" "$recv_file" "$wormhole_code")
-    if [ -n "$relay_url" ]; then
-        wormhole_args=("--relay-url" "$relay_url" "receive" "--accept-file" "-o" "$recv_file" "$wormhole_code")
-    fi
-
-    if ! wormhole "${wormhole_args[@]}"; then
-        echo -e "${RED}Wormhole receive failed.${NC}" >&2
-        rm -f "$recv_file"
-        return 1
-    fi
-
-    echo -e "${GREEN}File received. Decrypting...${NC}"
-
-    local list_resp
-    list_resp=$(send_request "$(jq -nc --arg path "$recv_file" '{method:"share_inventory",params:{path:$path}}')")
-    local list_ok
-    list_ok=$(echo "$list_resp" | jq -r '.success // false')
-    if [ "$list_ok" != "true" ]; then
-        echo -e "${RED}Decryption failed: $(echo "$list_resp" | jq -r '.error // "unknown"')${NC}" >&2
-        rm -f "$recv_file"
-        return 1
-    fi
-
-    local recv_count names_list
-    recv_count=$(echo "$list_resp" | jq -r '.data.count')
-    names_list=$(echo "$list_resp" | jq -r '.data.names[]')
-
-    echo
-    echo -e "${CYAN}Received ${recv_count} secret(s):${NC}"
-    while IFS= read -r name; do
-        echo "  $name"
-    done <<< "$names_list"
-    echo
-
-    # Confirm import. _has_gui guards against the headless-container
-    # silent-cancel bug fixed in PR #55.
-    local confirmed=false
-    if [ "$FORCE_CLI" = false ] && _has_gui; then
-        zenity --question \
-            --title="scrt4 — Import" \
-            --text="Import ${recv_count} secret(s) into your vault?" \
-            --ok-label="  Import  " \
-            --cancel-label="  Cancel  " \
-            --width=450 2>/dev/null && confirmed=true
-    else
-        echo -n "Import these secrets into your vault? [Y/n] "
-        read -r confirm
-        [[ "$confirm" =~ ^[Nn] ]] || confirmed=true
-    fi
-
-    if [ "$confirmed" != true ]; then
-        echo -e "${YELLOW}Cancelled. No secrets imported.${NC}"
-        rm -f "$recv_file"
-        return 0
-    fi
-
-    local import_resp
-    import_resp=$(send_request "$(jq -nc --arg path "$recv_file" '{method:"share_import",params:{path:$path}}')")
-    rm -f "$recv_file"
-    local import_ok
-    import_ok=$(echo "$import_resp" | jq -r '.success // false')
-    if [ "$import_ok" != "true" ]; then
-        echo -e "${RED}Import failed: $(echo "$import_resp" | jq -r '.error // "unknown"')${NC}" >&2
-        return 1
-    fi
-    local imported_count
-    imported_count=$(echo "$import_resp" | jq -r '.data.count')
-    echo -e "${GREEN}Imported ${imported_count} secret(s) into vault.${NC}"
-    _regen_claude_md 2>/dev/null || true
+    send_request '{"method":"clear"}'
 }
 
 # cmd_backup_vault [--local DIR] — tar the vault directory into a
@@ -3003,8 +2778,6 @@ main_dispatch() {
     _register_command run     cmd_run
     _register_command view    cmd_view
     _register_command rotate  cmd_rotate
-    _register_command share             cmd_share
-    _register_command receive           cmd_receive
     _register_command backup-vault      cmd_backup_vault
     _register_command backup-key        cmd_backup_key
     _register_command recover           cmd_recover
