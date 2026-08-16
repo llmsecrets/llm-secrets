@@ -110,7 +110,7 @@ The relay enables cross-device authentication (e.g., unlock WSL from your phone)
 - Browser hits `auth.llmsecrets.com` (Vercel domain with custom DNS)
 - Self-hosted Redis on GCP gives full control — encrypted blobs only, 2-minute TTL, no third-party data retention
 
-**GCP deployment:** `prod-repo-app-instance-v001` (us-east4-c), path `/home/jgott/scrt4-relay/`, Docker Compose (Redis 7 Alpine + Node.js)
+**Relay deployment:** self-hosted Docker Compose (Redis 7 Alpine + Node.js). The relay stores encrypted blobs only, with a 2-minute TTL; it is operator-specific infrastructure and is not described further here.
 
 ---
 

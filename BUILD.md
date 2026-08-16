@@ -1,169 +1,145 @@
-# Building LLM Secrets from Source
+# Building scrt4 from source
 
-This guide covers building the macOS desktop app from source. Building from source lets you verify that the published binary matches the open-source code.
+Building from source is currently the only supported way to install scrt4 from
+this repository. It is also how you verify that what runs on your machine is
+what is written here.
 
-## macOS v3.1.0
+## What you need
 
-### Prerequisites
+| Requirement | Minimum | Notes |
+|---|---|---|
+| Rust toolchain | 1.75+ | `rustup` from [rustup.rs](https://rustup.rs) |
+| A WebAuthn authenticator | — | See the README for supported devices |
 
-| Requirement | Minimum | How to install |
-|-------------|---------|----------------|
-| macOS | 12 (Monterey) | - |
-| Node.js | 18+ | `brew install node` or [nodejs.org](https://nodejs.org) |
-| npm | 9+ | Included with Node.js |
-| Xcode CLT | 14+ | `xcode-select --install` |
-| Touch ID | Required at runtime | Built-in on supported Macs |
+**That is the whole list.** The daemon builds with nothing but a Rust
+toolchain on every platform — no OpenSSL, no vcpkg, no system crypto
+libraries. `webauthn-rs` is deliberately *not* a dependency: the WebAuthn
+ceremony runs in the browser, and the daemon only ever handles the AES-GCM
+wrapped PRF output.
 
-### Build Steps
+Platform extras, only if you want the optional client-side pieces:
+
+| Platform | Extra | For |
+|---|---|---|
+| Linux / macOS | `zenity` (Linux) | the `scrt4 view` GUI editor |
+| Windows | PowerShell 5.1+ | the PowerShell client (ships with Windows) |
+
+---
+
+## Build the daemon
 
 ```bash
-# 1. Clone the repo and check out the release tag
 git clone https://github.com/llmsecrets/llm-secrets.git
-cd llm-secrets
-git checkout v3.1.0
-
-# 2. Install dependencies
-cd desktop-app
-npm install
-
-# 3. Build the Swift Touch ID helper (universal binary: arm64 + x86_64)
-npm run build:touchid
-
-# 4. Package the app
-npm run make:mac
+cd llm-secrets/scrt4/daemon
+cargo build --release
 ```
 
-**Output:** `out/make/zip/darwin/arm64/LLM Secrets-darwin-arm64-*.zip`
+Two binaries land in `target/release/`:
 
-The `.app` bundle is inside the zip. Extract and move to `/Applications`.
+| Binary | What it is |
+|---|---|
+| `scrt4-daemon` | The vault process. Owns the key, runs the auth flow, injects secrets. |
+| `scrt4` | The Rust CLI front end. |
 
-### Using Homebrew (coming soon)
+### Verify the build
 
 ```bash
-brew tap llmsecrets/llm-secrets
-brew install --cask llm-secrets
+cargo test
 ```
 
-See [issue #3](https://github.com/llmsecrets/llm-secrets/issues/3) for status.
-
-### Unsigned builds (no Apple Developer account)
-
-Without `APPLE_ID` and `APPLE_TEAM_ID` environment variables, code signing and notarization are skipped automatically. macOS Gatekeeper will block the app on first launch.
-
-**To open an unsigned build:**
-1. Right-click the app in Finder
-2. Click "Open"
-3. Click "Open" again in the dialog
-
-You only need to do this once. After that, the app opens normally.
-
-**Note:** Without code signing, Secure Enclave is unavailable. The app automatically falls back to AES-GCM encryption with the master key stored in macOS Keychain. This is still secure — the only difference is the key is protected by Keychain access controls rather than the Secure Enclave hardware.
+The suite runs without an authenticator: the WebAuthn ceremony happens in the
+browser, so the daemon's tests exercise everything below the PRF boundary
+directly.
 
 ---
 
-## Security Verification
+## Install the OS layer
 
-Since Electron binaries are not reproducible (code signing, build timestamps, native module metadata), security verification is done through source code audit.
+### Linux, macOS, WSL
 
-### Step 1: Verify the official download (optional)
-
-If you downloaded the pre-built release instead of building from source:
+The bash client is assembled from the core dispatcher:
 
 ```bash
-sha256sum LLM-Secrets-macOS-v3.1.0.dmg
-# Expected: dd1c6726ea159fba38c8cf78a22012709f06c69a7d29e19f33029b8b789f1550
+cd llm-secrets/scrt4
+bash scripts/build-scrt4.sh core-only ./scrt4
+install -m 755 ./scrt4 ~/.local/bin/scrt4
+install -m 755 daemon/target/release/scrt4-daemon ~/.local/bin/scrt4-daemon
 ```
 
-### Step 2: Audit the security-critical files
+`core-only` is the distribution with no modules — the one this repository
+ships. Run the daemon under a systemd user unit or launchd agent so it starts
+with your session; it listens on a Unix socket at `$XDG_RUNTIME_DIR/scrt4.sock`
+(or `/tmp/scrt4-$UID.sock`).
 
-There are only 4 files that handle authentication and encryption. The entire security surface is small enough to read in 10 minutes.
+### Windows
 
-#### `macos-helper/TouchIDAuth.swift` (27 lines)
+The PowerShell client lives in `scrt4/windows/`. Copy the module directory onto
+your PowerShell module path and put the `.cmd` shim on `PATH`:
 
-The Touch ID authentication binary. Verify:
-- Uses `LAContext.evaluatePolicy(.deviceOwnerAuthentication)` — Touch ID with password fallback
-- Returns exit code `0` (success), `1` (auth failed), or `2` (no auth available)
-- No network calls, no file I/O, no data exfiltration
-- Prompt text says "Unlock LLM Secrets vault" — nothing misleading
-
-#### `src/main/services/AuthServiceMac.ts` (41 lines)
-
-Spawns the Touch ID binary. Verify:
-- Calls `execFile` with the `TouchIDAuth` binary path — no shell injection possible
-- 30-second timeout on authentication
-- Only checks the exit code — does not parse or transmit any data
-- Binary path resolves to `resources/macos/TouchIDAuth` (bundled in the app)
-
-#### `src/main/services/CryptoServiceMac.ts` (162 lines)
-
-Handles all encryption. Verify:
-- Master key: 32 random bytes, stored in macOS Keychain via `keytar` (service: `LLMSecrets`)
-- Encryption: AES-256-CBC with PBKDF2 key derivation (100,000 iterations, SHA-256)
-- Each encryption uses a fresh random salt (16 bytes) and IV (16 bytes)
-- Encrypted files have `0o600` permissions (owner-only read/write)
-- Session key lives in memory only, with expiry (default 2 hours)
-- `listSecretNames()` returns key names only — never values
-- `decryptEnv()` returns plaintext only to the Electron main process — verify it is never sent to the renderer via IPC
-
-#### `entitlements.mac.plist` (39 lines)
-
-macOS app entitlements. Verify these are expected and appropriately scoped:
-
-| Entitlement | Purpose | Expected? |
-|------------|---------|-----------|
-| `biometric-authentication` | Touch ID | Yes |
-| `keychain-access-groups` | Store master key | Yes |
-| `network.client` | Check for updates | Yes |
-| `files.user-selected.read-write` | Read/write .env files | Yes |
-| `allow-jit` | Electron runtime requirement | Yes |
-| `allow-unsigned-executable-memory` | Electron runtime requirement | Yes |
-| `disable-library-validation` | Electron runtime requirement | Yes |
-| `disable-executable-page-protection` | Electron runtime requirement | Yes |
-
-The last four are standard Electron hardened runtime exceptions. Without them, the app would crash on launch.
-
-### Step 3: Verify no secrets leak to the LLM
-
-The core security guarantee: secret values are injected as environment variables into isolated subprocesses and never returned to Claude Code or any LLM.
-
-```bash
-# From the desktop-app directory, search for any code that might return secret values
-grep -rn "secret.*value\|plaintext\|decrypt.*return" src/main/services/
-
-# Verify decryptEnv is only called internally, not exposed via IPC to renderer
-grep -rn "decryptEnv\|plaintext" src/main/ src/preload.ts
+```powershell
+$dest = "$env:LOCALAPPDATA\scrt4"
+New-Item -ItemType Directory -Force $dest | Out-Null
+Copy-Item -Recurse scrt4\windows\scrt4      $dest
+Copy-Item          scrt4\windows\scrt4-cli.ps1 $dest
+Copy-Item          scrt4\windows\scrt4.cmd     $dest
+Copy-Item          scrt4\daemon\target\release\scrt4-daemon.exe $dest
 ```
 
-`decryptEnv()` should only be called by `listSecretNames()` (which strips values) and the subprocess injection path (which passes values to `child_process.exec` environment, not back to the renderer).
+Then add `%LOCALAPPDATA%\scrt4` to `PATH` and open a new terminal.
 
-### Step 4: Verify Electron Fuses
+> **Use `scrt4.cmd` as the entry point, not `scrt4.ps1`.** On `PATH`, PowerShell
+> resolves a `.ps1` ahead of a `.cmd`, so a bare `.ps1` entry point runs under
+> whatever execution policy is in force and fails on a Restricted machine with
+> "running scripts is disabled". The `.cmd` shim re-invokes with
+> `-ExecutionPolicy Bypass`, works identically in `cmd.exe` and PowerShell, and
+> needs no policy change. This is why the implementation file is named
+> `scrt4-cli.ps1` rather than `scrt4.ps1`.
 
-The `forge.config.ts` sets these security fuses at package time:
-
-| Fuse | Setting | Effect |
-|------|---------|--------|
-| `RunAsNode` | Disabled | Prevents using the app as a Node.js runtime |
-| `EnableCookieEncryption` | Enabled | Encrypts cookies on disk |
-| `EnableNodeOptionsEnvironmentVariable` | Disabled | Blocks NODE_OPTIONS injection |
-| `EnableNodeCliInspectArguments` | Disabled | Blocks --inspect debugging |
-| `EnableEmbeddedAsarIntegrityValidation` | Enabled | Validates asar archive integrity |
-| `OnlyLoadAppFromAsar` | Enabled | Prevents loading unpacked app code |
+The daemon communicates over a named pipe (`scrt4-<user>`) rather than a Unix
+socket, and unlock runs through Windows Hello on `localhost:9474`.
 
 ---
 
-## Why Binaries Are Not Reproducible
+## Unsigned builds on Windows
 
-Electron apps cannot produce identical binaries across builds because:
+A binary you compiled yourself is unsigned, and Windows will treat it as such.
 
-1. **Code signing** — Apple Developer certificates embed unique identifiers
-2. **Notarization** — Apple's notarization service adds unique stapled tickets
-3. **Build timestamps** — Webpack embeds timestamps in bundles
-4. **Native modules** — `keytar` is compiled per-platform with different build metadata
+- **SmartScreen** shows "Windows protected your PC". Choose *More info* →
+  *Run anyway*.
+- **Smart App Control**, if enabled, blocks it outright — there is no
+  "run anyway". The symptom is "An Application Control policy has blocked this
+  file", logged in Event Viewer under
+  `Microsoft-Windows-CodeIntegrity/Operational` as ID 3033 or 3077.
 
-This is why source code audit is the recommended verification method.
+Two workarounds while code-signing is in progress:
+
+1. Build with `cargo build` instead of `cargo build --release`. Debug binaries
+   are frequently allowed where release binaries are blocked.
+2. Turn Smart App Control off: Windows Security → App & browser control →
+   Smart App Control settings. **This is a one-way switch** — Windows will not
+   let you re-enable it without reinstalling.
 
 ---
 
-## Security Contact
+## Reproducing a build
 
-Report security issues to: josh@lendvest.io
+`Cargo.lock` is committed, so `cargo build --release` resolves the exact
+dependency versions used here. To check a binary against source:
+
+```bash
+cargo build --release
+sha256sum target/release/scrt4-daemon
+```
+
+Rust builds are not yet bit-for-bit reproducible across toolchain versions, so
+compare hashes only against a build made with the same `rustc --version` on the
+same target triple.
+
+---
+
+## Building the old desktop app
+
+The Electron app, the WSL daemon and the original CLI are no longer part of
+this repository. Their source and build instructions are preserved on the
+`archive/legacy-stack` branch. They are unmaintained and receive no security
+updates — do not deploy them.
