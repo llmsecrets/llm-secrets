@@ -1,0 +1,15 @@
+[package]
+name = "llmsecrets"
+version = "0.4.6"
+edition = "2021"
+rust-version = "1.74"
+description = "LLM Secrets — hardware-bound secrets for AI coding agents. This crate is the project namespace; the installable tool is the `scrt4` crate."
+license = "AGPL-3.0-only"
+repository = "https://github.com/llmsecrets/llm-secrets"
+homepage = "https://llmsecrets.com"
+documentation = "https://docs.llmsecrets.com"
+readme = "README.md"
+keywords = ["secrets", "webauthn", "fido2", "passkey", "vault"]
+categories = ["cryptography", "authentication"]
+
+[dependencies]
