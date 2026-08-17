@@ -86,6 +86,28 @@ case "$resp" in
     *) echo "   FAIL: unknown method was not rejected: $resp"; FAILED=1 ;;
 esac
 
+echo "== the command surface has not shrunk"
+# v0.4.4 shipped without `upgrade`. A branch cut before that feature landed
+# carried an older copy of the client and silently reverted it on merge, and
+# nothing here noticed: the build succeeded, every method still routed, and
+# the only symptom was a command that no longer existed. Losing a command is
+# not a routing failure, so it needs its own check.
+#
+# This list is a floor, not an inventory. Adding a command does not require
+# touching it; removing one is meant to be a deliberate edit here.
+REQUIRED="add backup-key backup-vault clear extend help list lock logout
+          recover run setup status unlock upgrade verify-self view"
+missing=""
+for want in $REQUIRED; do
+    grep -qE "_register_command[ 	]+${want}\b" "$CLI" || missing="$missing $want"
+done
+if [ -n "$missing" ]; then
+    echo "   FAIL: the CLI no longer registers:$missing"
+    FAILED=1
+else
+    echo "   all $(echo $REQUIRED | wc -w | tr -d ' ') required commands present"
+fi
+
 echo "== every method the CLI can send is routable"
 # Two spellings, and missing the second one makes this check pass vacuously:
 # requests written as raw JSON use "method":"x", but those built through jq
