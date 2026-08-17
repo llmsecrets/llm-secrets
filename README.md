@@ -77,19 +77,23 @@ bash scripts/build-scrt4.sh core-only ~/.local/bin/scrt4
 
 Full walkthrough, including Windows, in **[BUILD.md](./BUILD.md)**.
 
-Prebuilt Linux and macOS binaries of *this* repository are now published, and
-every one is checksum-verified before it is installed:
+Or install a prebuilt binary. These are built from this repository, and the
+installer verifies each one against the published manifest before putting it
+on disk:
 
 ```bash
-SCRT4_VERSION=v0.4.3 curl -fsSL https://install.llmsecrets.com/native | sh
+curl -fsSL https://install.llmsecrets.com/native | sh
 ```
 
-The version is pinned on purpose. The default (unpinned) install still resolves
-to an older build from a different tree, and it will keep doing so until that
-channel is switched over — so until then, naming the version is the difference
-between getting this source and getting something else.
+Linux (`x86_64`, `aarch64`) and macOS (Apple Silicon). `SCRT4_VERSION=v0.4.3`
+pins a specific release if you want one.
 
-Once installed, `scrt4 upgrade` handles subsequent updates.
+Afterwards, `scrt4 upgrade` installs later releases — checksum-verified the
+same way — and `scrt4 verify-self` re-checks the binary you are running
+against the manifest at any time.
+
+Releases are served from the domain rather than from GitHub Releases, so the
+tag list here is source history; the channel above is what ships.
 
 ### Use
 
