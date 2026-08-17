@@ -44,11 +44,27 @@ So there are two ways to help, and the first one is small:
 us what happened. That is the whole job, and right now it is the only thing
 standing between this and shipping.
 
+First get a build with the commands in it — they landed in **v0.4.6**:
+
+```bash
+# new install
+curl -fsSL https://install.llmsecrets.com/native | sh
+
+# already have scrt4?
+scrt4 upgrade
+```
+
+Either way, `scrt4 --version` should say `0.4.6` or later. Then:
+
 ```bash
 scrt4 unlock            # your phone, as usual
 scrt4 setup --local     # Chrome opens — register with Touch ID
 scrt4 unlock --local    # should open the vault with no phone at all
 ```
+
+Prefer to build it yourself? `BUILD.md` covers that, and
+`scrt4 verify-self` will confirm a downloaded binary matches the published
+manifest.
 
 Any outcome is useful, including a failure — a clear report that it does not
 work is worth as much to us as one that says it does, and it saves the next
@@ -161,7 +177,7 @@ on disk:
 curl -fsSL https://install.llmsecrets.com/native | sh
 ```
 
-Linux (`x86_64`, `aarch64`) and macOS (Apple Silicon). `SCRT4_VERSION=v0.4.5`
+Linux (`x86_64`, `aarch64`) and macOS (Apple Silicon). `SCRT4_VERSION=v0.4.6`
 pins a specific release if you want one.
 
 Afterwards, `scrt4 upgrade` installs later releases — checksum-verified the
@@ -175,7 +191,7 @@ tag list here is source history; the channel above is what ships.
 
 ```bash
 scrt4 setup                        # one-time FIDO2 enrollment
-scrt4 setup --local                # add this device's own biometric (Windows today)
+scrt4 setup --local                # add this device's own biometric (see #54)
 scrt4 unlock                       # default 20-hour session
 scrt4 add API_KEY=sk-live-...      # add a secret
 scrt4 list                         # see names (never values)
