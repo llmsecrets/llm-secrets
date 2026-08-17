@@ -19,6 +19,60 @@ Linux, Windows, and WSL.
 
 ---
 
+## 🎉 Five weekly active users — and we'd like one of you to be a maintainer for macOS
+
+That is a small number and we are pleased with it. Five people unlocked a
+vault in each of the last several weeks; one of them is the maintainer, and
+the other four found this on their own and kept using it.
+
+Here is the interesting part: **every one of those four is on a Mac.**
+
+And macOS is the one platform where scrt4 cannot yet use the laptop's own
+biometric. Windows users can run `scrt4 setup --local` and unlock with
+Windows Hello. On a Mac you reach for your phone, every single time. The
+people getting the most out of this are the ones with the most friction.
+
+**We would like one of you to own that, as the macOS maintainer.** The
+daemon already implements the flow — `setup_local` answers on every platform
+— so this is a client command and a browser ceremony, not a native
+integration. What it needs is somebody with a Mac to build it and confirm it
+works, because nobody on this side can test Touch ID.
+
+👉 **[#52 — macOS Touch ID / platform passkey support](https://github.com/llmsecrets/llm-secrets/issues/52)**
+
+No prior knowledge of the codebase is assumed; the issue explains what is
+already built and what is left.
+
+**What contributors get.** Not everything we build ships publicly — the
+public distribution is the vault core, and there is more behind it. People
+who maintain a platform get access to that work. It is the only way we have
+to say thank you properly, and it is worth more than a mention in a
+changelog.
+
+### On the numbers above, and what we can actually see
+
+We know the operating system split because a web server writes a user-agent
+string to a log. That is the whole extent of it, and we look at it for one
+reason: to find out where the product is worst for the people using it.
+Finding out that our most regular users are the ones with the clunkiest
+unlock is exactly the sort of thing we want to know.
+
+For the avoidance of doubt about a tool that holds your secrets:
+
+- **There are no accounts.** No email, no sign-up, nothing to identify you.
+- **The client sends no telemetry.** Nothing phones home about your usage.
+- **The relay cannot read what it relays** — payloads are encrypted
+  end-to-end between your phone and your computer.
+- What remains is an ordinary HTTP access log on the machine that brokers
+  the unlock: an address, a timestamp, a user-agent.
+
+*How the count was derived: distinct networks that completed a relay unlock,
+grouped per ISO week, addresses reduced to a /24. A network is not strictly
+a person — the same user on mobile data and at home looks like two — so read
+it as an honest order of magnitude rather than a headcount.*
+
+---
+
 ## The Problem
 
 When Claude Code reads your `.env` file, your API keys, database passwords, and private keys land in the AI's context window — and every prompt cache, log line, and error report that follows.
