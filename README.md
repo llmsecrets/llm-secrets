@@ -19,7 +19,7 @@ Linux, Windows, and WSL.
 
 ---
 
-## 🎉 Five weekly active users — and we'd like one of you to be a maintainer for macOS
+## 🎉 Five weekly active users — and we need a macOS tester (ten minutes) or maintainer
 
 That is a small number and we are pleased with it. Five people unlocked a
 vault in each of the last several weeks; one of them is the maintainer, and
@@ -32,22 +32,44 @@ biometric. Windows users can run `scrt4 setup --local` and unlock with
 Windows Hello. On a Mac you reach for your phone, every single time. The
 people getting the most out of this are the ones with the most friction.
 
-**We would like one of you to own that, as the macOS maintainer.** The
-daemon already implements the flow — `setup_local` answers on every platform
-— so this is a client command and a browser ceremony, not a native
-integration. What it needs is somebody with a Mac to build it and confirm it
-works, because nobody on this side can test Touch ID.
+**The code for it is already written.** The daemon implements the flow on
+every platform, the client commands exist, and Chrome has been confirmed to
+negotiate the PRF extension the design depends on. What is missing is a
+fingerprint: nobody on this side owns a Mac, so nothing has ever been put in
+front of a real Touch ID sensor.
 
-👉 **[#54 — macOS Touch ID / platform passkey support](https://github.com/llmsecrets/llm-secrets/issues/54)**
+So there are two ways to help, and the first one is small:
 
-No prior knowledge of the codebase is assumed; the issue explains what is
-already built and what is left.
+**🧪 macOS tester — about ten minutes, no code.** Run three commands and tell
+us what happened. That is the whole job, and right now it is the only thing
+standing between this and shipping.
+
+```bash
+scrt4 unlock            # your phone, as usual
+scrt4 setup --local     # Chrome opens — register with Touch ID
+scrt4 unlock --local    # should open the vault with no phone at all
+```
+
+Any outcome is useful, including a failure — a clear report that it does not
+work is worth as much to us as one that says it does, and it saves the next
+person the same afternoon. It cannot damage anything: a failed enrolment
+writes nothing and leaves your phone unlock exactly as it was.
+
+**🔧 macOS maintainer — if it needs fixing, or you want to own the platform.**
+If the test surfaces something, or you would like macOS to have someone
+looking after it properly, that is the role. It is a bash client and a
+browser ceremony, not a native integration — no Swift, no Xcode, no Apple
+developer account.
+
+👉 **[#54 — confirm Touch ID unlock](https://github.com/llmsecrets/llm-secrets/issues/54)** —
+the commands, what is already verified, and what is left.
+
+No prior knowledge of the codebase is assumed for either role.
 
 **What contributors get.** Not everything we build ships publicly — the
-public distribution is the vault core, and there is more behind it. People
-who maintain a platform get access to that work. It is the only way we have
-to say thank you properly, and it is worth more than a mention in a
-changelog.
+public distribution is the vault core, and there is more behind it. Testers
+and maintainers both get access to that work. It is the only way we have to
+say thank you properly, and it is worth more than a mention in a changelog.
 
 ### On the numbers above, and what we can actually see
 
