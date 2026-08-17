@@ -68,20 +68,31 @@ bash scripts/build-scrt4.sh core-only ~/.local/bin/scrt4
 
 Full walkthrough, including Windows, in **[BUILD.md](./BUILD.md)**.
 
-A hosted channel serving builds of *this* repository is being set up. Until it
-exists we will not point you at one, because the existing endpoints serve
-builds from a different tree.
+Prebuilt Linux and macOS binaries of *this* repository are now published, and
+every one is checksum-verified before it is installed:
+
+```bash
+SCRT4_VERSION=v0.4.3 curl -fsSL https://install.llmsecrets.com/native | sh
+```
+
+The version is pinned on purpose. The default (unpinned) install still resolves
+to an older build from a different tree, and it will keep doing so until that
+channel is switched over — so until then, naming the version is the difference
+between getting this source and getting something else.
+
+Once installed, `scrt4 upgrade` handles subsequent updates.
 
 ### Use
 
 ```bash
 scrt4 setup                        # one-time FIDO2 enrollment
 scrt4 unlock                       # default 20-hour session
-scrt4 import path/to/.env          # pull in an existing .env file
-scrt4 add API_KEY=sk-live-...      # or add one at a time
+scrt4 add API_KEY=sk-live-...      # add a secret
 scrt4 list                         # see names (never values)
 scrt4 run 'cmd $env[NAME]'         # agent-safe execution
 scrt4 view                         # GUI-only view/edit
+scrt4 lock                         # end the session early
+scrt4 upgrade                      # install the published release (SHA256-verified)
 scrt4 verify-self                  # check binary against the published manifest
 scrt4 backup-key --save /usb/path  # export an encrypted recovery file
 scrt4 llm                          # emit an llms.txt-style capability dump
