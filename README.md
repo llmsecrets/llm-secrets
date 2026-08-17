@@ -6,6 +6,17 @@
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-green)](LICENSE)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/llmsecrets/llm-secrets)
 
+**The active code lives under [`scrt4/`](./scrt4).** It is AGPL-3.0,
+hardware-bound, under 10 MB end-to-end, and runs the same way on macOS,
+Linux, Windows, and WSL.
+
+| Platform | Support |
+|---|---|
+| **macOS** | Apple Silicon native; Intel via Rosetta 2 |
+| **Linux** | `x86_64` and `aarch64` — glibc 2.34+ (Ubuntu 22.04+, Debian 12+, RHEL 9+) |
+| **Windows** | PowerShell 5.1+, native — the daemon speaks a named pipe rather than a Unix socket |
+| **WSL** | Same build as Linux |
+
 ---
 
 ## The Problem
@@ -31,8 +42,6 @@ LLM Secrets holds your secrets in an encrypted vault. The AI writes commands wit
 ---
 
 ## scrt4 — the current generation
-
-The active code lives under [`scrt4/`](./scrt4). It is AGPL-3.0, hardware-bound, under 10 MB end-to-end, and runs the same way on macOS, Linux, and WSL.
 
 ### How the key works
 
@@ -133,47 +142,63 @@ The trust equation is simple: if the AI cannot see a value, it cannot leak a val
 
 ---
 
-## Deprecated: the original LLM Secrets stack
-
-The components below predate scrt4. They are **no longer developed**, and they
-now live on the [`archive/legacy-stack`](https://github.com/llmsecrets/llm-secrets/tree/archive/legacy-stack)
-branch rather than in `main`, so that what you check out is what is maintained.
-
-| Component | What it was | Replaced by |
-|---|---|---|
-| `cli/` | PowerShell CLI for Windows (`scrt.ps1`) | `scrt4`, plus the client in `scrt4/windows/` |
-| `crypto-core/` | Windows Hello AES-256-CBC crypto module | FIDO2 + AES-256-GCM in the daemon |
-| `desktop-app/` | Electron app (TOTP + license-gated) | daemon + CLI |
-| `wsl-daemon/` | Original WSL bridge | the daemon ships its own transport |
-
-They receive no security fixes. If you still run one, migrate.
-
-**Why replaced?**
-1. **FIDO2 > Windows Hello + TOTP.** scrt4's key is hardware-bound via `hmac-secret` and portable across devices. The original stack relied on platform-specific biometric APIs and a TOTP secondary.
-2. **AGPL everywhere.** Both scrt4 and the legacy stack are now AGPL-3.0, but scrt4 was built open from day one with no license gating in the install path.
-3. **Cross-platform parity.** scrt4 runs the same way on macOS, Linux, and WSL. The original stack had divergent behavior across platforms.
-
-The archive branch is kept indefinitely so existing users can self-host and
-migrate on their own schedule.
-
----
-
 ## Trust & verification
 
-- **Build it yourself** — the strongest verification available today, and the
-  only install path this repository points at. See [BUILD.md](./BUILD.md).
+- **Build it yourself** — the strongest verification available, and the reason
+  the source layout is kept small enough to read. See [BUILD.md](./BUILD.md).
 - **Installer hash in-tree** — [`scrt4/install/scrt4-native.sh.sha256`](./scrt4/install/scrt4-native.sh.sha256)
   is committed alongside the script it covers, so the installer can be checked
   against the repository before it is run.
-- **Self-verification** — a running scrt4 can check its own bytes against a
-  manifest with `scrt4 verify-self`.
-- **Reproducible layout** — the scrt4 working tree (source, bash modules, install scripts, docs) is about 1.5 MB. "Under 10 MB" is the conservative public claim; you can audit the CLI (~2,800 lines of core bash + ~900 LoC per module) and the daemon (Rust, <2k LoC) line by line.
+- **Reproducible layout** — the scrt4 working tree (source, bash modules, install scripts, docs) is about 1.5 MB. "Under 10 MB" is the conservative public claim; you can audit the CLI (~2,800 lines of core bash) and the daemon (Rust, <2k LoC) line by line.
+
+### Self-verification
+
+A binary that can be tampered with between the build and your disk is only as
+trustworthy as the last hop. `scrt4 verify-self` closes that gap: it hashes
+**the file that is actually executing** — not whatever `scrt4` happens to
+resolve to on `$PATH` — and compares it against the manifest published for its
+own version.
+
+```console
+$ scrt4 verify-self
+Verifying scrt4 binary: /home/you/.local/bin/scrt4
+Expected version: 0.4.3
+Local hash:    d0f3a830a532020eebfae718a627e238a72f72e0751e6bebd18edde3c532d2b6
+Fetching:      https://install.llmsecrets.com/releases/v0.4.3/SHA256SUMS
+Expected hash: d0f3a830a532020eebfae718a627e238a72f72e0751e6bebd18edde3c532d2b6
+✓ Match — this binary is the published 0.4.3 release.
+```
+
+It exits non-zero on a mismatch, so it works in a script or a CI step.
+
+A mismatch is not automatically an attack. The three ordinary causes, in
+rough order of likelihood: you built from source and are running your own
+binary; `$PATH` resolves to a different copy than you think; or the release
+was re-cut. It is worth understanding which before assuming the worst.
+
+The same manifest is what `scrt4 upgrade` checks before it replaces anything,
+so an install that fails verification will not silently become one that
+passes.
 
 ### AI-assisted audit
 
 Don't want to read 2,000 lines of Rust yourself? [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/llmsecrets/llm-secrets) indexes this repo and answers questions like *"Does the daemon ever write secret values to disk?"* or *"How is the master key derived?"* against the actual source.
 
 ---
+
+## The original LLM Secrets stack
+
+Four components predate scrt4 — the PowerShell CLI (`cli/`), the Windows Hello
+crypto module (`crypto-core/`), the Electron app (`desktop-app/`) and the WSL
+bridge (`wsl-daemon/`). All are replaced by the daemon and its clients, receive
+no security fixes, and now live on the
+[`archive/legacy-stack`](https://github.com/llmsecrets/llm-secrets/tree/archive/legacy-stack)
+branch so that what you check out is what is maintained. If you still run one,
+migrate.
+
+They were replaced because the key should be hardware-bound rather than tied to
+a platform biometric API with a TOTP secondary, and because the behaviour should
+not differ per operating system. The archive branch is kept indefinitely.
 
 ## Contributing
 
