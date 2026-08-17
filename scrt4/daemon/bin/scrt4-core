@@ -867,6 +867,7 @@ CORE COMMANDS:
     list-encrypted      List registered .scrt4 archives
     cleanup-encrypted [--prune]  Show or prune stale inventory entries
     llm [--json]        Print LLM/agent capability map (llms.txt)
+    upgrade [--check]   Install the published release (verifies SHA256 first)
     verify-self         Verify the scrt4 binary against the published SHA256SUMS
 EOF
     printf '\nVersion: %s\n' "$VERSION"
@@ -879,7 +880,7 @@ EOF
     for i in "${!_SCRT4_CMDS[@]}"; do
         local handler="${_SCRT4_HANDLERS[$i]}"
         case "$handler" in
-            cmd_help|cmd_status|cmd_setup|cmd_unlock|cmd_extend|cmd_logout|cmd_list|cmd_add|cmd_run|cmd_view|cmd_rotate|cmd_list_encrypted|cmd_cleanup_encrypted|cmd_daemon|cmd_backup_vault|cmd_backup_key|cmd_recover|cmd_recover_key|cmd_backup_guide|cmd_verify_self)
+            cmd_help|cmd_status|cmd_setup|cmd_unlock|cmd_extend|cmd_logout|cmd_list|cmd_add|cmd_run|cmd_view|cmd_rotate|cmd_list_encrypted|cmd_cleanup_encrypted|cmd_daemon|cmd_backup_vault|cmd_backup_key|cmd_recover|cmd_recover_key|cmd_backup_guide|cmd_verify_self|cmd_upgrade)
                 # Core handlers — already shown in the CORE COMMANDS block above.
                 continue ;;
         esac
@@ -2665,6 +2666,189 @@ a non-interactive audit, run:
 LLMEOF
 }
 
+# ── upgrade ───────────────────────────────────────────────────────────
+#
+# Channels are a fixed table, deliberately. Resolving a caller-supplied URL
+# here would mean "download this and put it on $PATH", which is remote code
+# execution with extra steps. Unknown names are rejected rather than treated
+# as a host.
+_scrt4_channel_base() {
+    case "$1" in
+        public) printf 'https://install.llmsecrets.com' ;;
+        *)      return 1 ;;
+    esac
+}
+
+# cmd_upgrade [--channel NAME] [--version TAG] [--check] [--force]
+#
+# Replaces the running CLI and daemon with a published build. Everything is
+# downloaded and checksum-verified before anything on disk is touched, so a
+# failed download leaves a working install rather than half of one.
+cmd_upgrade() {
+    local channel="public" want_version="" check_only=false force=false
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --channel) channel="${2:-}"; shift 2 ;;
+            --channel=*) channel="${1#--channel=}"; shift ;;
+            --version) want_version="${2:-}"; shift 2 ;;
+            --version=*) want_version="${1#--version=}"; shift ;;
+            --check) check_only=true; shift ;;
+            --force) force=true; shift ;;
+            *) echo -e "${RED}upgrade: unknown argument: $1${NC}" >&2
+               echo "Usage: scrt4 upgrade [--channel NAME] [--version TAG] [--check] [--force]" >&2
+               return 1 ;;
+        esac
+    done
+
+    local base
+    if ! base=$(_scrt4_channel_base "$channel"); then
+        echo -e "${RED}upgrade: unknown channel: ${channel}${NC}" >&2
+        echo "Available: public" >&2
+        return 1
+    fi
+    # SCRT4_RELEASE_HOST already overrides the host for verify-self; honour it
+    # here too so a mirror can be tested without editing the table.
+    base="${SCRT4_RELEASE_HOST:-$base}"
+
+    local target="$want_version"
+    if [ -z "$target" ]; then
+        target=$(curl -fsSL --max-time 20 "${base}/releases/latest.txt" 2>/dev/null | tr -d '[:space:]')
+        if [ -z "$target" ]; then
+            echo -e "${RED}upgrade: could not read the published version from ${base}.${NC}" >&2
+            return 1
+        fi
+    fi
+
+    local current="v${VERSION#v}"
+    local wanted="v${target#v}"
+    echo -e "${CYAN}Installed:${NC} ${current}"
+    echo -e "${CYAN}Published:${NC} ${wanted}  (${channel})"
+
+    if [ "$current" = "$wanted" ] && [ "$force" != true ]; then
+        echo -e "${GREEN}Already up to date.${NC}"
+        return 0
+    fi
+
+    # Going backwards is almost never what someone typing "upgrade" wants,
+    # and a channel that has not caught up yet would otherwise silently
+    # downgrade a newer build. Comparing for inequality alone is not enough.
+    if [ "$current" != "$wanted" ] && [ "$force" != true ] && [ -z "$want_version" ]; then
+        local lower
+        lower=$(printf '%s\n%s\n' "${current#v}" "${wanted#v}" | sort -V 2>/dev/null | head -1)
+        if [ "$lower" = "${wanted#v}" ]; then
+            echo -e "${YELLOW}The ${channel} channel is behind this build — not downgrading.${NC}"
+            echo -e "${YELLOW}Use --version ${wanted} to install it anyway.${NC}"
+            return 0
+        fi
+    fi
+
+    if [ "$check_only" = true ]; then
+        echo -e "${YELLOW}Update available. Run: scrt4 upgrade${NC}"
+        return 0
+    fi
+
+    local os arch
+    case "$(uname -s 2>/dev/null)" in
+        Linux)  os=linux ;;
+        Darwin) os=darwin ;;
+        *) echo -e "${RED}upgrade: unsupported OS.${NC}" >&2; return 1 ;;
+    esac
+    case "$(uname -m 2>/dev/null)" in
+        x86_64|amd64)  arch=x86_64 ;;
+        aarch64|arm64) arch=aarch64 ;;
+        *) echo -e "${RED}upgrade: unsupported architecture.${NC}" >&2; return 1 ;;
+    esac
+    # Only aarch64 darwin is published; Intel Macs run it under Rosetta 2.
+    [ "$os" = darwin ] && arch=aarch64
+
+    local sha_cmd=""
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha_cmd="sha256sum"
+    elif command -v shasum >/dev/null 2>&1; then
+        sha_cmd="shasum -a 256"
+    else
+        echo -e "${RED}upgrade: no sha256sum or shasum — refusing to install unverified binaries.${NC}" >&2
+        return 1
+    fi
+
+    # Where the running install lives. Replacing whatever is on PATH would
+    # upgrade a different copy than the one in use.
+    local cli_path="${BASH_SOURCE[0]:-$0}"
+    if command -v readlink >/dev/null 2>&1; then
+        local resolved
+        resolved=$(readlink -f "$cli_path" 2>/dev/null || true)
+        [ -n "$resolved" ] && cli_path="$resolved"
+    fi
+    local install_dir
+    install_dir=$(dirname "$cli_path")
+    local daemon_path="${install_dir}/scrt4-daemon"
+    if [ ! -w "$install_dir" ]; then
+        echo -e "${RED}upgrade: ${install_dir} is not writable.${NC}" >&2
+        echo -e "${YELLOW}Re-run with the permissions that installed scrt4.${NC}" >&2
+        return 1
+    fi
+
+    local tmp
+    tmp=$(mktemp -d "${TMPDIR:-/tmp}/scrt4-upgrade.XXXXXX") || return 1
+    # shellcheck disable=SC2064
+    trap "rm -rf '$tmp'" RETURN
+
+    local rel="${base}/releases/${wanted}"
+    local daemon_file="scrt4-daemon-${os}-${arch}"
+    echo -e "${CYAN}Downloading:${NC} ${rel}"
+    if ! curl -fsSL --max-time 300 "${rel}/scrt4"          -o "${tmp}/scrt4" \
+    || ! curl -fsSL --max-time 300 "${rel}/${daemon_file}" -o "${tmp}/${daemon_file}" \
+    || ! curl -fsSL --max-time 60  "${rel}/SHA256SUMS"     -o "${tmp}/SHA256SUMS"; then
+        echo -e "${RED}upgrade: download failed — nothing was changed.${NC}" >&2
+        return 1
+    fi
+
+    # Verify before anything is replaced. Filter to the two files we fetched
+    # so other-arch entries do not fail the check.
+    (
+        cd "$tmp" || exit 1
+        grep -E "  [*]?(scrt4|${daemon_file})\$" SHA256SUMS > expected.sums 2>/dev/null
+        [ -s expected.sums ] || { echo "manifest has no entry for scrt4/${daemon_file}" >&2; exit 1; }
+        # shellcheck disable=SC2086
+        $sha_cmd -c expected.sums >/dev/null 2>&1
+    )
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}upgrade: checksum verification FAILED — nothing was changed.${NC}" >&2
+        return 1
+    fi
+    echo -e "${GREEN}Checksums verified.${NC}"
+
+    # Install via a temp name + mv so a crash mid-write cannot leave a
+    # truncated binary in place. Replacing a running file is fine on Unix:
+    # the open inode survives until the process exits.
+    chmod 755 "${tmp}/scrt4" "${tmp}/${daemon_file}"
+    mv -f "${tmp}/scrt4"          "${cli_path}.new"    && mv -f "${cli_path}.new"    "$cli_path"
+    mv -f "${tmp}/${daemon_file}" "${daemon_path}.new" && mv -f "${daemon_path}.new" "$daemon_path"
+    echo -e "${GREEN}Installed ${wanted} to ${install_dir}.${NC}"
+
+    # The old daemon keeps running until restarted, so the session survives
+    # the upgrade but the new binary is not in use until this happens.
+    if command -v systemctl >/dev/null 2>&1 && systemctl --user is-enabled scrt4-daemon.service >/dev/null 2>&1; then
+        systemctl --user restart scrt4-daemon.service 2>/dev/null \
+            && echo -e "${GREEN}Restarted scrt4-daemon.service.${NC}" \
+            || echo -e "${YELLOW}Restart scrt4-daemon.service to finish.${NC}"
+    elif [ "$os" = darwin ] && command -v launchctl >/dev/null 2>&1; then
+        local plist="$HOME/Library/LaunchAgents/com.llmsecrets.scrt4-daemon.plist"
+        if [ -f "$plist" ]; then
+            launchctl unload "$plist" 2>/dev/null || true
+            launchctl load "$plist" 2>/dev/null \
+                && echo -e "${GREEN}Reloaded the scrt4 launch agent.${NC}" \
+                || echo -e "${YELLOW}Reload the scrt4 launch agent to finish.${NC}"
+        fi
+    else
+        echo -e "${YELLOW}Restart scrt4-daemon to finish.${NC}"
+    fi
+
+    echo -e "${YELLOW}Your session was not affected; run 'scrt4 status' to confirm.${NC}"
+    return 0
+}
+
 # cmd_verify_self — hash the running scrt4 binary and compare against the
 # published SHA256SUMS at install.llmsecrets.com. Exit 0 on match, 1 on
 # mismatch or fetch failure. Core command: the user's first question is
@@ -2783,6 +2967,7 @@ main_dispatch() {
     _register_command list-encrypted    cmd_list_encrypted
     _register_command cleanup-encrypted cmd_cleanup_encrypted
     _register_command llm               cmd_llm
+    _register_command upgrade      cmd_upgrade
     _register_command verify-self       cmd_verify_self
 
     # Modules are sourced after this file by the build script, so their
