@@ -1,8 +1,21 @@
 [package]
-name = "scrt4-daemon"
-version = "0.1.0"
+# Published to crates.io as `scrt4`; the binary it installs stays
+# `scrt4-daemon`, which is what the clients and the service units invoke.
+name = "scrt4"
+version = "0.4.6"
 edition = "2021"
-description = "WebAuthn PRF secret manager daemon"
+rust-version = "1.74"
+description = "Hardware-bound secrets vault for AI coding agents. Secrets are injected into a subprocess and scrubbed from its output, so an agent can use a credential without ever seeing it. The vault key is derived from a FIDO2 authenticator via WebAuthn PRF and is never stored."
+license = "AGPL-3.0-only"
+repository = "https://github.com/llmsecrets/llm-secrets"
+homepage = "https://llmsecrets.com"
+documentation = "https://docs.llmsecrets.com"
+readme = "README.md"
+keywords = ["secrets", "webauthn", "fido2", "passkey", "vault"]
+categories = ["command-line-utilities", "cryptography", "authentication"]
+# Two binaries ship from here: scrt4-daemon owns the vault, and scrt4 is the
+# Rust client. The richer bash client is built separately by
+# scripts/build-scrt4.sh and is what the installers place on PATH.
 
 [dependencies]
 # Async runtime
