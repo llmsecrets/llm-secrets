@@ -746,6 +746,135 @@ ensure_unlocked() {
     return 1
 }
 
+# open_ceremony_browser URL — open the platform-passkey ceremony, in Chrome
+# where we can find it.
+#
+# Deliberately narrower than open_browser. The relay flow is a QR code and
+# works anywhere; this ceremony needs an authenticator that exposes the
+# WebAuthn PRF extension, and on macOS "the platform authenticator" is not
+# one thing — Safari reaches iCloud Keychain, Chrome has its own
+# profile-bound authenticator behind Touch ID, and their PRF support differs
+# by version. Chrome's is the one we target.
+#
+# Falls back to the default browser rather than failing: a user with no
+# Chrome should still get a shot at it, and the URL is always printed so
+# they can paste it wherever they like.
+open_ceremony_browser() {
+    local url="$1"
+    local os
+    os=$(uname -s 2>/dev/null || echo unknown)
+
+    if [ "$os" = "Darwin" ]; then
+        for app in "Google Chrome" "Chromium" "Microsoft Edge" "Brave Browser"; do
+            if open -a "$app" "$url" >/dev/null 2>&1; then
+                echo -e "  ${CYAN}Opened in ${app}.${NC}" >&2
+                return 0
+            fi
+        done
+    else
+        for bin in google-chrome google-chrome-stable chromium chromium-browser microsoft-edge brave-browser; do
+            if command -v "$bin" >/dev/null 2>&1; then
+                "$bin" "$url" >/dev/null 2>&1 &
+                echo -e "  ${CYAN}Opened in ${bin}.${NC}" >&2
+                return 0
+            fi
+        done
+    fi
+
+    echo -e "  ${YELLOW}Chrome not found — using your default browser.${NC}" >&2
+    echo -e "  ${YELLOW}If registration fails, try again in Chrome.${NC}" >&2
+    open_browser "$url"
+}
+
+# ── platform passkey (Touch ID / Windows Hello) ───────────────────────
+#
+# The daemon wraps the EXISTING master key with the PRF output of a
+# localhost-rpId credential, so what lands on disk is only openable by a
+# live biometric ceremony. That is why setup requires an unlocked session:
+# there has to be a master key in memory to wrap.
+
+# run_setup_local_flow — enrol this machine's authenticator.
+run_setup_local_flow() {
+    local start
+    start=$(send_request '{"method":"setup_local"}' 2>/dev/null || true)
+    if [ "$(echo "$start" | jq -r '.success // false' 2>/dev/null)" != "true" ]; then
+        local err
+        err=$(echo "$start" | jq -r '.error // "unknown error"' 2>/dev/null)
+        echo -e "${RED}setup --local failed: ${err}${NC}" >&2
+        case "$err" in
+            *"ession"*|*"master key"*)
+                echo -e "${YELLOW}This adds a second way to open a vault that already exists,${NC}" >&2
+                echo -e "${YELLOW}so unlock first with your phone: ${NC}scrt4 unlock" >&2 ;;
+        esac
+        return 1
+    fi
+
+    local url
+    url=$(echo "$start" | jq -r '.data.url // empty' 2>/dev/null)
+    if [ -z "$url" ]; then
+        echo -e "${RED}setup --local failed: daemon returned no URL.${NC}" >&2
+        return 1
+    fi
+
+    echo -e "${CYAN}Registering this device's passkey...${NC}" >&2
+    open_ceremony_browser "$url"
+    echo -e "  ${CYAN}URL:${NC} ${url}" >&2
+    echo -e "  Register a passkey in the browser window (Touch ID, Windows Hello)." >&2
+    echo -e "  ${YELLOW}Chrome is the tested browser for this step.${NC}" >&2
+    echo "" >&2
+    echo -ne "  ${CYAN}Waiting for registration...${NC}" >&2
+
+    local done_resp
+    done_resp=$(send_request '{"method":"setup_local_complete"}' 180 2>/dev/null || true)
+    echo "" >&2
+    if [ "$(echo "$done_resp" | jq -r '.success // false' 2>/dev/null)" = "true" ]; then
+        echo -e "${GREEN}Device passkey registered.${NC}" >&2
+        echo -e "${GREEN}You can now unlock with: ${NC}scrt4 unlock --local" >&2
+        return 0
+    fi
+    echo -e "${RED}setup --local failed: $(echo "$done_resp" | jq -r '.error // "unknown"')${NC}" >&2
+    return 1
+}
+
+# run_unlock_local_flow [ttl] — unlock using this machine's authenticator,
+# with no phone and no relay. Same ceremony as _wa_gate phase 1.
+run_unlock_local_flow() {
+    local ttl="${1:-72000}"
+    local start
+    start=$(send_request "$(jq -nc --argjson t "$ttl" '{method:"unlock_local",params:{ttl:$t}}')" 2>/dev/null || true)
+    if [ "$(echo "$start" | jq -r '.success // false' 2>/dev/null)" != "true" ]; then
+        local err
+        err=$(echo "$start" | jq -r '.error // "unknown error"' 2>/dev/null)
+        echo -e "${RED}unlock --local failed: ${err}${NC}" >&2
+        echo -e "${YELLOW}If this device has no passkey yet: ${NC}scrt4 unlock && scrt4 setup --local" >&2
+        return 1
+    fi
+
+    local url
+    url=$(echo "$start" | jq -r '.data.url // empty' 2>/dev/null)
+    if [ -z "$url" ]; then
+        echo -e "${RED}unlock --local failed: daemon returned no URL.${NC}" >&2
+        return 1
+    fi
+
+    echo -e "${CYAN}Opening browser for authentication...${NC}" >&2
+    open_ceremony_browser "$url"
+    echo -e "  ${CYAN}URL:${NC} ${url}" >&2
+    echo -e "  Authenticate in the browser window." >&2
+    echo "" >&2
+    echo -ne "  ${CYAN}Waiting for authentication...${NC}" >&2
+
+    local done_resp
+    done_resp=$(send_request "$(jq -nc --argjson t "$ttl" '{method:"unlock_local_complete",params:{ttl:$t}}')" 180 2>/dev/null || true)
+    echo "" >&2
+    if [ "$(echo "$done_resp" | jq -r '.success // false' 2>/dev/null)" = "true" ]; then
+        echo -e "${GREEN}Session active.${NC}" >&2
+        return 0
+    fi
+    echo -e "${RED}unlock --local failed: $(echo "$done_resp" | jq -r '.error // "unknown"')${NC}" >&2
+    return 1
+}
+
 # TCB: webauthn step-up gate
 # Verifies: sensitive operations trigger a fresh WebAuthn challenge
 #           regardless of session state. The session token alone is
@@ -845,7 +974,10 @@ CORE COMMANDS:
     daemon              Start scrt4-daemon in the foreground
     status              Check session status
     setup [--agent]     Register a WebAuthn passkey (first-time enrollment)
-    unlock [--agent] [ttl] Authenticate and start a session
+    setup --local       Add this device's own passkey (Touch ID / Windows
+                        Hello) so unlocking needs no phone. Unlock first.
+    unlock [--local] [--agent] [ttl] Authenticate and start a session
+                        (--local uses this device's own passkey)
                         (--agent renders the QR in plain ASCII with banner
                          markers so AI coding assistants pass it through
                          unmodified instead of truncating it)
@@ -942,14 +1074,21 @@ cmd_status() {
 # scans a QR on their phone, the phone authenticates with a passkey,
 # and the encrypted PRF payload comes back through the relay.
 cmd_unlock() {
+    local _unlock_local=false
     local ttl="72000"
     while [ $# -gt 0 ]; do
         case "$1" in
+            --local)     _unlock_local=true; shift ;;
             --agent)     AGENT_MODE=true; FORCE_CLI=true; shift ;;
             --cli|agent) FORCE_CLI=true; shift ;;
             *)           ttl="$1"; shift ;;
         esac
     done
+
+    if [ "$_unlock_local" = true ]; then
+        run_unlock_local_flow "${ttl:-72000}"
+        return $?
+    fi
 
     run_unlock_flow "$ttl"
 }
@@ -961,13 +1100,20 @@ cmd_unlock() {
 # them — we print a loud warning and require typed "YES" confirmation
 # before proceeding. Ported from the v0.1.0 monolith.
 cmd_setup() {
+    local use_local=false
     while [ $# -gt 0 ]; do
         case "$1" in
+            --local)     use_local=true; shift ;;
             --agent)     AGENT_MODE=true; FORCE_CLI=true; shift ;;
             --cli|agent) FORCE_CLI=true; shift ;;
             *)           shift ;;
         esac
     done
+
+    if [ "$use_local" = true ]; then
+        run_setup_local_flow
+        return $?
+    fi
 
     # Warn if existing secrets would be wiped. Registration generates
     # a new master key, and the old vault becomes unrecoverable without

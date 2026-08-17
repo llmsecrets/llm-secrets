@@ -19,6 +19,82 @@ Linux, Windows, and WSL.
 
 ---
 
+## 🎉 Five weekly active users — and we need a macOS tester (ten minutes) or maintainer
+
+That is a small number and we are pleased with it. Five people unlocked a
+vault in each of the last several weeks; one of them is the maintainer, and
+the other four found this on their own and kept using it.
+
+Here is the interesting part: **every one of those four is on a Mac.**
+
+And macOS is the one platform where scrt4 cannot yet use the laptop's own
+biometric. Windows users can run `scrt4 setup --local` and unlock with
+Windows Hello. On a Mac you reach for your phone, every single time. The
+people getting the most out of this are the ones with the most friction.
+
+**The code for it is already written.** The daemon implements the flow on
+every platform, the client commands exist, and Chrome has been confirmed to
+negotiate the PRF extension the design depends on. What is missing is a
+fingerprint: nobody on this side owns a Mac, so nothing has ever been put in
+front of a real Touch ID sensor.
+
+So there are two ways to help, and the first one is small:
+
+**🧪 macOS tester — about ten minutes, no code.** Run three commands and tell
+us what happened. That is the whole job, and right now it is the only thing
+standing between this and shipping.
+
+```bash
+scrt4 unlock            # your phone, as usual
+scrt4 setup --local     # Chrome opens — register with Touch ID
+scrt4 unlock --local    # should open the vault with no phone at all
+```
+
+Any outcome is useful, including a failure — a clear report that it does not
+work is worth as much to us as one that says it does, and it saves the next
+person the same afternoon. It cannot damage anything: a failed enrolment
+writes nothing and leaves your phone unlock exactly as it was.
+
+**🔧 macOS maintainer — if it needs fixing, or you want to own the platform.**
+If the test surfaces something, or you would like macOS to have someone
+looking after it properly, that is the role. It is a bash client and a
+browser ceremony, not a native integration — no Swift, no Xcode, no Apple
+developer account.
+
+👉 **[#54 — confirm Touch ID unlock](https://github.com/llmsecrets/llm-secrets/issues/54)** —
+the commands, what is already verified, and what is left.
+
+No prior knowledge of the codebase is assumed for either role.
+
+**What contributors get.** Not everything we build ships publicly — the
+public distribution is the vault core, and there is more behind it. Testers
+and maintainers both get access to that work. It is the only way we have to
+say thank you properly, and it is worth more than a mention in a changelog.
+
+### On the numbers above, and what we can actually see
+
+We know the operating system split because a web server writes a user-agent
+string to a log. That is the whole extent of it, and we look at it for one
+reason: to find out where the product is worst for the people using it.
+Finding out that our most regular users are the ones with the clunkiest
+unlock is exactly the sort of thing we want to know.
+
+For the avoidance of doubt about a tool that holds your secrets:
+
+- **There are no accounts.** No email, no sign-up, nothing to identify you.
+- **The client sends no telemetry.** Nothing phones home about your usage.
+- **The relay cannot read what it relays** — payloads are encrypted
+  end-to-end between your phone and your computer.
+- What remains is an ordinary HTTP access log on the machine that brokers
+  the unlock: an address, a timestamp, a user-agent.
+
+*How the count was derived: distinct networks that completed a relay unlock,
+grouped per ISO week, addresses reduced to a /24. A network is not strictly
+a person — the same user on mobile data and at home looks like two — so read
+it as an honest order of magnitude rather than a headcount.*
+
+---
+
 ## The Problem
 
 When Claude Code reads your `.env` file, your API keys, database passwords, and private keys land in the AI's context window — and every prompt cache, log line, and error report that follows.
@@ -85,7 +161,7 @@ on disk:
 curl -fsSL https://install.llmsecrets.com/native | sh
 ```
 
-Linux (`x86_64`, `aarch64`) and macOS (Apple Silicon). `SCRT4_VERSION=v0.4.3`
+Linux (`x86_64`, `aarch64`) and macOS (Apple Silicon). `SCRT4_VERSION=v0.4.5`
 pins a specific release if you want one.
 
 Afterwards, `scrt4 upgrade` installs later releases — checksum-verified the
@@ -99,6 +175,7 @@ tag list here is source history; the channel above is what ships.
 
 ```bash
 scrt4 setup                        # one-time FIDO2 enrollment
+scrt4 setup --local                # add this device's own biometric (Windows today)
 scrt4 unlock                       # default 20-hour session
 scrt4 add API_KEY=sk-live-...      # add a secret
 scrt4 list                         # see names (never values)
