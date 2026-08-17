@@ -38,7 +38,7 @@ daemon already implements the flow — `setup_local` answers on every platform
 integration. What it needs is somebody with a Mac to build it and confirm it
 works, because nobody on this side can test Touch ID.
 
-👉 **[#52 — macOS Touch ID / platform passkey support](https://github.com/llmsecrets/llm-secrets/issues/52)**
+👉 **[#54 — macOS Touch ID / platform passkey support](https://github.com/llmsecrets/llm-secrets/issues/54)**
 
 No prior knowledge of the codebase is assumed; the issue explains what is
 already built and what is left.
@@ -139,7 +139,7 @@ on disk:
 curl -fsSL https://install.llmsecrets.com/native | sh
 ```
 
-Linux (`x86_64`, `aarch64`) and macOS (Apple Silicon). `SCRT4_VERSION=v0.4.3`
+Linux (`x86_64`, `aarch64`) and macOS (Apple Silicon). `SCRT4_VERSION=v0.4.5`
 pins a specific release if you want one.
 
 Afterwards, `scrt4 upgrade` installs later releases — checksum-verified the
@@ -153,6 +153,7 @@ tag list here is source history; the channel above is what ships.
 
 ```bash
 scrt4 setup                        # one-time FIDO2 enrollment
+scrt4 setup --local                # add this device's own biometric (Windows today)
 scrt4 unlock                       # default 20-hour session
 scrt4 add API_KEY=sk-live-...      # add a secret
 scrt4 list                         # see names (never values)
