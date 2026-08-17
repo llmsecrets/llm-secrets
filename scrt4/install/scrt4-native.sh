@@ -21,9 +21,9 @@
 #
 # What it does:
 #   - Detects OS (linux/darwin) + arch (x86_64/aarch64)
-#   - Downloads the matching prebuilt scrt4-daemon + scrt4 CLI (native-default:
-#     TCB core + encrypt-folder + import-env + cloud-crypt)
-#     from the GitHub Releases page and verifies SHA256
+#   - Downloads the matching prebuilt scrt4-daemon + scrt4 CLI (core-only:
+#     the vault, run, backup and recovery surface; no modules)
+#     and verifies SHA256
 #   - If --module flags were passed: verifies each against the server
 #     whitelist, fetches + SHA-verifies each module source, splices module
 #     bodies into the core scrt4 binary at the documented hook marker
@@ -62,9 +62,8 @@ main() {
 
     # ── 0. Parse args ─────────────────────────────────────────────────
     # MODULES is a space-separated list of module names that were requested
-    # via --module flags or SCRT4_MODULES env. Empty by default — native-default
-    # (encrypt-folder + import-env + cloud-crypt) is already baked into the
-    # downloaded CLI.
+    # via --module flags or SCRT4_MODULES env. Empty by default — the
+    # downloaded CLI is core-only and carries no modules.
     MODULES=""
 
     while [ $# -gt 0 ]; do
@@ -252,10 +251,9 @@ main() {
     # If --module flags were passed (or SCRT4_MODULES env was set), verify
     # each against the server whitelist, fetch + sha-check each source,
     # and splice them into the downloaded core CLI at the hook marker.
-    # Default (no flag) keeps native-default — the downloaded CLI already
-    # contains the TCB surface (unlock / add / view / list / run / backup /
-    # recover) plus encrypt-folder + import-env. Extra modules (github, gcp,
-    # stripe, etc.) are the opt-in path.
+    # Default (no flag) is core-only — the downloaded CLI contains the
+    # vault surface (unlock / add / view / list / run / backup / recover)
+    # and nothing else. Modules are the opt-in path.
     if [ -n "$MODULES" ]; then
         install_modules
     else
@@ -389,8 +387,8 @@ Common env overrides:
   SCRT4_RELEASE_BASE_URL=URL      Override the release-artifact host
   SCRT4_REPO=owner/repo           Repo slug used in error/issue links
 
-Default install is native-default: TCB core (unlock, add, view, list, run,
-backup-*, recover) plus encrypt-folder, import-env, and cloud-crypt. Extra
+Default install is core-only: the vault surface (unlock, add, view, list,
+run, backup-*, recover) and nothing else. Extra
 modules (github, gcp, stripe, etc.) are opt-in only and must be on the
 server allowlist.
 EOF
@@ -408,7 +406,7 @@ install_modules() {
     printf 'scrt4-native: fetching module whitelist %s\n' "$MANIFEST_URL" >&2
     if ! curl -fsSL "$MANIFEST_URL" -o "${TMP}/modules.json"; then
         printf 'scrt4-native: could not fetch module whitelist from %s\n' "$MANIFEST_URL" >&2
-        printf '  Drop --module flags to install native-default only, or set SCRT4_MANIFEST_URL to a reachable mirror.\n' >&2
+        printf '  Drop --module flags to install core-only, or set SCRT4_MANIFEST_URL to a reachable mirror.\n' >&2
         exit 1
     fi
     if ! jq -e '.modules' "${TMP}/modules.json" >/dev/null 2>&1; then
@@ -692,10 +690,8 @@ Two pieces the user needs:
 **a. Drive-scoped OAuth for cloud-crypt.** Fastest setup paths:
 
     scrt4 cloud-crypt auth setup --from-gws
-        Uses the `gws` CLI (Google Workspace). If they have
-        ~/.claude/skills/google-workspace/SKILL.md, that skill handles
-        the consent + refresh-token dance end-to-end. Ask the user to
-        run the skill.
+        Uses the `gws` CLI (Google Workspace), which handles the
+        consent + refresh-token exchange.
 
     scrt4 cloud-crypt auth setup --from-secret personal_google_workspace
         If they already have a `personal_google_workspace` OAuth blob
@@ -767,7 +763,7 @@ The syntax is literally `$env[NAME]` — not `$NAME`, not `${NAME}`.
 `scrt4 llm` emits an llms.txt-style dump of:
 
 - secret names currently in the vault (names only, never values)
-- loaded modules (cloud-crypt, import-env, encrypt-folder, …)
+- loaded modules, if any
 - capabilities each module provides, with auth gates and setup paths
 - session status and recommended next steps
 
@@ -795,9 +791,8 @@ never touch terminal scrollback.
 | Unlock (default 20 h) | `scrt4 unlock` |
 | List secret names | `scrt4 list` |
 | Add a secret | `scrt4 add NAME=value` |
-| Import a `.env` file | `scrt4 import path/to/.env` |
 | Run a command with injection | `scrt4 run 'cmd $env[NAME]'` |
-| Encrypted Drive backup | `scrt4 cloud-crypt encrypt-and-push PATH` |
+| Back up the vault | `scrt4 backup-vault` |
 | Save master key (recovery) | `scrt4 backup-key --save DIR` |
 | Capability discovery | `scrt4 llm` |
 | Full command reference | `scrt4 help` |
@@ -810,14 +805,14 @@ never touch terminal scrollback.
 3. During a session, secrets live in daemon memory — never written unencrypted.
 4. You (the LLM) never see values, only names and commands.
 5. `scrt4 view` is GUI-only; its output is invisible to you by design.
-6. cloud-crypt encrypts locally before upload — Google Drive sees ciphertext only.
+6. Backups are encrypted before they leave the machine.
 
 ## Troubleshooting
 
 - **"Secret not found"** — name may be different. Run `scrt4 list`.
 - **"Session locked"** — ask the user to run `scrt4 unlock`.
 - **Need a new secret** — tell the user to run `scrt4 add NAME=value`, or
-  import from a `.env` with `scrt4 import FILE`.
+  add it with `scrt4 add NAME=value`.
 - **Never `scrt4 view` in an automation context** — it pops a GUI dialog.
 
 ---

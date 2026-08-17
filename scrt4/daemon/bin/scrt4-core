@@ -2607,10 +2607,7 @@ Setup paths (pick one):
 
     scrt4 cloud-crypt auth setup --from-gws
         Uses Google Workspace CLI (\`gws\`). Fastest — handles the
-        browser-consent + refresh-token dance automatically. If you
-        are Claude Code, the google-workspace skill at
-        ~/.claude/skills/google-workspace/SKILL.md knows this flow
-        end-to-end — ask the user to run it.
+        browser-consent + refresh-token dance automatically.
 
     scrt4 cloud-crypt auth setup --from-secret personal_google_workspace
         Reuses an existing OAuth blob already in the vault (e.g.
