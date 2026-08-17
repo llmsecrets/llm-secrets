@@ -746,6 +746,46 @@ ensure_unlocked() {
     return 1
 }
 
+# open_ceremony_browser URL — open the platform-passkey ceremony, in Chrome
+# where we can find it.
+#
+# Deliberately narrower than open_browser. The relay flow is a QR code and
+# works anywhere; this ceremony needs an authenticator that exposes the
+# WebAuthn PRF extension, and on macOS "the platform authenticator" is not
+# one thing — Safari reaches iCloud Keychain, Chrome has its own
+# profile-bound authenticator behind Touch ID, and their PRF support differs
+# by version. Chrome's is the one we target.
+#
+# Falls back to the default browser rather than failing: a user with no
+# Chrome should still get a shot at it, and the URL is always printed so
+# they can paste it wherever they like.
+open_ceremony_browser() {
+    local url="$1"
+    local os
+    os=$(uname -s 2>/dev/null || echo unknown)
+
+    if [ "$os" = "Darwin" ]; then
+        for app in "Google Chrome" "Chromium" "Microsoft Edge" "Brave Browser"; do
+            if open -a "$app" "$url" >/dev/null 2>&1; then
+                echo -e "  ${CYAN}Opened in ${app}.${NC}" >&2
+                return 0
+            fi
+        done
+    else
+        for bin in google-chrome google-chrome-stable chromium chromium-browser microsoft-edge brave-browser; do
+            if command -v "$bin" >/dev/null 2>&1; then
+                "$bin" "$url" >/dev/null 2>&1 &
+                echo -e "  ${CYAN}Opened in ${bin}.${NC}" >&2
+                return 0
+            fi
+        done
+    fi
+
+    echo -e "  ${YELLOW}Chrome not found — using your default browser.${NC}" >&2
+    echo -e "  ${YELLOW}If registration fails, try again in Chrome.${NC}" >&2
+    open_browser "$url"
+}
+
 # ── platform passkey (Touch ID / Windows Hello) ───────────────────────
 #
 # The daemon wraps the EXISTING master key with the PRF output of a
@@ -777,9 +817,10 @@ run_setup_local_flow() {
     fi
 
     echo -e "${CYAN}Registering this device's passkey...${NC}" >&2
-    open_browser "$url"
+    open_ceremony_browser "$url"
     echo -e "  ${CYAN}URL:${NC} ${url}" >&2
     echo -e "  Register a passkey in the browser window (Touch ID, Windows Hello)." >&2
+    echo -e "  ${YELLOW}Chrome is the tested browser for this step.${NC}" >&2
     echo "" >&2
     echo -ne "  ${CYAN}Waiting for registration...${NC}" >&2
 
@@ -817,7 +858,7 @@ run_unlock_local_flow() {
     fi
 
     echo -e "${CYAN}Opening browser for authentication...${NC}" >&2
-    open_browser "$url"
+    open_ceremony_browser "$url"
     echo -e "  ${CYAN}URL:${NC} ${url}" >&2
     echo -e "  Authenticate in the browser window." >&2
     echo "" >&2
