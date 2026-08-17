@@ -1,0 +1,98 @@
+name: Publish to crates.io
+
+# Publishes `scrt4` and `llmsecrets` when a version tag is pushed, so the
+# registry tracks releases instead of drifting behind them.
+#
+# Deliberately a separate workflow from the binary release, and it waits for
+# that one to succeed first. A crates.io version is permanent — it can be
+# yanked but never replaced — so nothing is published until the same commit
+# has already passed the glibc floor, the command floor, and the runtime
+# routing check.
+
+on:
+  workflow_run:
+    workflows: ["Release native binaries"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to publish (e.g. v0.4.7)'
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    # workflow_run fires on failure too; only a green release may publish.
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       startsWith(github.event.workflow_run.head_branch, 'v'))
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Work out which tag we are publishing
+        id: tag
+        run: |
+          set -euo pipefail
+          TAG="${{ github.event.inputs.tag || github.event.workflow_run.head_branch }}"
+          case "$TAG" in
+            v*.*.*) ;;
+            *) echo "not a version tag: $TAG — nothing to publish"; exit 1 ;;
+          esac
+          echo "tag=$TAG"            >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}"    >> "$GITHUB_OUTPUT"
+          echo "Publishing $TAG"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.tag.outputs.tag }}
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # The manifests carry a version for local builds, but the tag is the
+      # authority — otherwise every release needs someone to remember to bump
+      # two files, and the one time they forget the publish either fails or
+      # ships the wrong number.
+      - name: Set both manifest versions from the tag
+        run: |
+          set -euo pipefail
+          V='${{ steps.tag.outputs.version }}'
+          for f in scrt4/daemon/Cargo.toml crates/llmsecrets/Cargo.toml; do
+            # Only the [package] version — the first one in the file. A blunt
+            # global replace would rewrite dependency versions too.
+            awk -v v="$V" '
+              /^\[package\]/ { inpkg = 1 }
+              /^\[/ && !/^\[package\]/ { inpkg = 0 }
+              inpkg && /^version[ \t]*=/ && !done { print "version = \"" v "\""; done = 1; next }
+              { print }
+            ' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+            echo "  $f -> $(grep -m1 '^version' "$f")"
+          done
+
+      - name: Publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          set -uo pipefail
+          if [ -z "${CARGO_REGISTRY_TOKEN:-}" ]; then
+            echo "CARGO_REGISTRY_TOKEN is not set — add it in repository secrets"
+            exit 1
+          fi
+          V='${{ steps.tag.outputs.version }}'
+          fail=0
+          # scrt4 first: it is the crate people actually install.
+          for dir in scrt4/daemon crates/llmsecrets; do
+            name=$(grep -m1 '^name' "$dir/Cargo.toml" | sed 's/.*"\(.*\)".*/\1/')
+            echo "::group::$name $V"
+            # Re-running a tag must not fail the workflow; a version that is
+            # already up is the desired end state, not an error.
+            if curl -sf -A "scrt4-release (github actions)" \
+                 "https://crates.io/api/v1/crates/$name/$V" >/dev/null 2>&1; then
+              echo "$name $V is already on crates.io — skipping"
+            else
+              ( cd "$dir" && cargo publish --allow-dirty ) || fail=1
+            fi
+            echo "::endgroup::"
+          done
+          exit $fail
