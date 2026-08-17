@@ -773,7 +773,7 @@
         <ul class="sidebar-links">
           <li><a href="#how-it-works">How It Works</a></li>
           <li><a href="#security-model">Security Model</a></li>
-          <li><a href="#modes">Simple vs Advanced Mode</a></li>
+          <li><a href="#modes">Unlock methods</a></li>
         </ul>
       </div>
       <div class="sidebar-section">
@@ -977,30 +977,64 @@ scrt encrypt --force</code></pre>
         </tr>
       </table>
 
-      <h2 id="modes">Simple vs Advanced Mode</h2>
+      <h2 id="modes">Unlock methods</h2>
+
+      <p>There are no longer two modes. There is one key — derived from your
+      authenticator — and two ways to present it. Both end in the same place:
+      the vault key is re-derived for the session and never stored.</p>
 
       <table>
         <tr>
-          <th>Feature</th>
-          <th>Simple Mode</th>
-          <th>Advanced Mode</th>
+          <th>&nbsp;</th>
+          <th>Platform passkey</th>
+          <th>Roaming passkey</th>
         </tr>
         <tr>
-          <td>Authentication</td>
-          <td>Windows Hello only</td>
-          <td>Windows Hello + KeePass password</td>
+          <td>What you touch</td>
+          <td>Windows Hello, Touch ID</td>
+          <td>Face ID on iPhone, a Google passkey on Android, or a security key (YubiKey, Trezor, OnlyKey)</td>
         </tr>
         <tr>
-          <td>Master key storage</td>
-          <td>DPAPI encrypted</td>
-          <td>KeePass database</td>
+          <td>How it reaches the daemon</td>
+          <td>A browser window on <code>localhost</code></td>
+          <td>Relayed through <a href="https://auth.llmsecrets.com">auth.llmsecrets.com</a>, end-to-end encrypted</td>
+        </tr>
+        <tr>
+          <td>Needs a second device</td>
+          <td>No</td>
+          <td>Yes — that is the point</td>
         </tr>
         <tr>
           <td>Best for</td>
-          <td>Daily use, personal machines</td>
-          <td>High-security, shared machines</td>
+          <td>The machine you use every day</td>
+          <td>A key that survives the laptop, and unlocking from a phone</td>
         </tr>
       </table>
+
+      <p>Neither stores a password, and there is no secondary factor to
+      enrol. Where the old build sealed a master key with DPAPI or kept it in
+      a KeePass database, scrt4 derives the key from the authenticator itself
+      via the WebAuthn PRF extension (CTAP2 <code>hmac-secret</code>) — so
+      there is no stored key for either mechanism to protect.</p>
+
+      <p>The relay is worth being precise about: it forwards encrypted
+      WebAuthn payloads between your phone and your computer and can read
+      none of them. No secret, and no vault key, is ever visible to it.</p>
+
+      <div class="callout callout-info">
+        <div class="callout-title">Biometrics work everywhere — the phone is a first-class key</div>
+        <p>Face ID on an iPhone and a Google passkey on Android are supported
+        on <strong>every</strong> platform, over caBLE. On macOS and Linux
+        that is the normal way to unlock, and it is a biometric unlock: your
+        face or fingerprint, just on the device already in your pocket. The
+        laptop never holds a credential that can be lifted off it.</p>
+        <p>The one thing Windows has that the others do not is
+        <code>scrt4 setup --local</code>, which enrols <em>the laptop's own</em>
+        biometric so you can unlock without reaching for the phone. The daemon
+        supports that flow on every platform — <code>setup_local</code> answers
+        on a Linux daemon with a precondition, not an unknown-method error —
+        but the Unix client has no command that calls it yet.</p>
+      </div>
 
       <h2 id="claude-code">Using with Claude Code</h2>
 
