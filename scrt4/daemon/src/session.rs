@@ -395,6 +395,73 @@ impl Session {
             None => Err("No secrets available".into()),
         }
     }
+
+
+    /// The active session's token, base64, for handing back to the client that
+    /// unlocked it.
+    ///
+    /// ⚠️ This is the ONLY way the token leaves the daemon, and it is called on
+    /// exactly one path: the response to a successful unlock, delivered over the
+    /// connection that performed the ceremony. It must never be added to
+    /// `status`, to an error, or to a log line — a token readable without
+    /// authenticating is a token that authenticates nothing.
+    pub fn token_b64(&self) -> Option<String> {
+        use base64::Engine;
+        self.token
+            .as_ref()
+            .map(|t| base64::engine::general_purpose::STANDARD.encode(t))
+    }
+
+    /// Does `presented` match the active session's token?
+    ///
+    /// Fails closed on every path: no active session, malformed base64, wrong
+    /// length and wrong bytes all return `false`, and the caller reports one
+    /// message for all of them. Distinguishing "no session" from "wrong token"
+    /// would let an unauthenticated caller probe session state through the
+    /// error text, which is the recon step this is meant to close.
+    ///
+    /// The comparison is constant time in the LENGTH-EQUAL case. An unequal
+    /// length returns early, which leaks only that — and the length is fixed at
+    /// 32 bytes by `store`, so it is public knowledge, not a secret.
+    pub fn verify_token(&self, presented: &str) -> bool {
+        use base64::Engine;
+
+        // Check liveness first, but do not return yet: an expired session and a
+        // wrong token must take the same path out.
+        let live = self.is_active();
+
+        let expected = match self.token.as_ref() {
+            Some(t) => t,
+            None => return false,
+        };
+
+        let got = match base64::engine::general_purpose::STANDARD.decode(presented) {
+            Ok(b) => b,
+            Err(_) => return false,
+        };
+
+        if got.len() != expected.len() {
+            return false;
+        }
+
+        // Hand-rolled rather than pulled in as a dependency: this is four lines
+        // and adding a crate to the TCB for them is the worse trade. The
+        // accumulator must be folded AFTER the whole loop — an early `return`
+        // on first mismatch is exactly the timing leak being avoided here.
+        let mut diff: u8 = 0;
+        for (a, b) in expected.iter().zip(got.iter()) {
+            diff |= a ^ b;
+        }
+
+        // Zeroize the decoded copy: it is the caller's secret and it is ours to
+        // clean up, and on the failure paths above it never existed.
+        let mut got = got;
+        for b in got.iter_mut() {
+            *b = 0;
+        }
+
+        live && diff == 0
+    }
 }
 
 /// Thread-safe session state

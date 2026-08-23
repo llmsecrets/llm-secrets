@@ -6,7 +6,7 @@ use crate::audit::{self, AuditEvent, EventType, EventResult};
 use crate::keystore;
 use crate::localhost;
 use crate::webauthn;
-use crate::protocol::{Request, Response, ResponseData};
+use crate::protocol::{Envelope, Request, Response, ResponseData};
 use crate::session::SharedSession;
 use crate::subprocess::run_with_secrets;
 
@@ -79,6 +79,48 @@ async fn handle_request(line: &str) -> Response {
             return Response::error(format!("Invalid request: {}", e));
         }
     };
+
+    // a request that uses the unlocked session must present the token
+    // minted when it was unlocked. Checked HERE, once, ahead of the dispatch —
+    // not inside each handler — so a handler cannot be added without the check,
+    // and so the classification lives in exactly one place
+    // (`session_binding::binding`, which has no wildcard arm).
+    //
+    // The envelope is parsed separately from `Request`: the token authenticates
+    // the CHANNEL, the request describes the OPERATION.
+    //
+    // A malformed envelope is treated as "no token" rather than a parse error —
+    // its only field is optional, so the sole way to fail is a line that is not
+    // an object, which `Request` has already rejected above.
+    if crate::session_binding::requires_token(&request) {
+        let envelope: Envelope = serde_json::from_str(line).unwrap_or_default();
+
+        let ok = match envelope.session_token.as_deref() {
+            Some(t) => get_session().read().await.verify_token(t),
+            None => false,
+        };
+
+        if !ok {
+            // ⚠️ ONE message for absent, malformed, wrong, and no-active-session.
+            // Distinguishing them would hand an unauthenticated caller an oracle
+            // for session state — which is the reconnaissance step (`status`,
+            // then `run`) that this layer exists to break.
+            audit::log_event(
+                AuditEvent::new(EventType::AuthFailure, EventResult::Failure)
+                    .with_error("session token missing or invalid")
+            );
+            tracing::warn!(
+                "refused a request that requires the session token; \
+                 token_presented={}",
+                envelope.session_token.is_some()
+            );
+            return Response::error(
+                "This request requires the session token from `scrt4 unlock`. \
+                 Run `scrt4 unlock` in this shell, or re-run it if the session \
+                 was started elsewhere."
+            );
+        }
+    }
 
     match request {
         Request::Store { token, secrets, ttl } => handle_store(token, secrets, ttl).await,
@@ -206,7 +248,12 @@ async fn handle_add_secrets(
                 AuditEvent::new(EventType::SecretsAdded, EventResult::Success)
                     .with_secret_count(added)
             );
-            Response::ok_with_data(ResponseData::Unlocked { count })
+            Response::ok_with_data(ResponseData::Unlocked {
+                count,
+                // Not an unlock: this reuses an existing session, so it must
+                // not reissue the token to whoever called it.
+                session_token: None,
+            })
         }
         Err(e) => {
             audit::log_event(
@@ -696,7 +743,11 @@ async fn handle_unlock_webauthn_complete(
                     .with_ttl(ttl_secs)
                     .with_secret_count(count)
             );
-            Response::ok_with_data(ResponseData::Unlocked { count })
+            Response::ok_with_data(ResponseData::Unlocked {
+                count,
+                // the only path the token leaves the daemon by.
+                session_token: session.token_b64(),
+            })
         }
         Err(e) => Response::error(e),
     }
@@ -953,7 +1004,11 @@ async fn handle_unlock_local_complete(ttl: Option<u64>) -> Response {
                     .with_ttl(ttl_secs)
                     .with_secret_count(count)
             );
-            Response::ok_with_data(ResponseData::Unlocked { count })
+            Response::ok_with_data(ResponseData::Unlocked {
+                count,
+                // the only path the token leaves the daemon by.
+                session_token: session.token_b64(),
+            })
         }
         Err(e) => Response::error(e),
     }

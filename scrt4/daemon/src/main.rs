@@ -6,6 +6,7 @@ use tokio::net::UnixListener;
 
 mod protocol;
 mod session;
+mod session_binding;
 mod handlers;
 mod sanitize;
 mod subprocess;

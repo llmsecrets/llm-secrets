@@ -2,6 +2,18 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// The wire envelope that carries the session token.
+///
+/// Parsed SEPARATELY from `Request` so the token authenticates the CHANNEL
+/// while the request describes the OPERATION. Keeping them apart means a
+/// token can never be mistaken for part of the operation.
+#[derive(Debug, Default, Deserialize)]
+pub struct Envelope {
+    /// Session token from the unlock that established this session, base64.
+    #[serde(default)]
+    pub session_token: Option<String>,
+}
+
 /// Request from client to daemon
 #[derive(Debug, Deserialize)]
 #[serde(tag = "method", content = "params")]
@@ -221,7 +233,14 @@ pub enum ResponseData {
     Reveal { value: String },
     Challenge { challenge: String, prompt: String, code: String },
     RevealAll { secrets: HashMap<String, String> },
-    Unlocked { count: usize },
+    Unlocked {
+        count: usize,
+        /// the session token, returned ONLY here — on the
+        /// connection that performed the unlock ceremony. Never in
+        /// `status`, an error, or a log line.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        session_token: Option<String>,
+    },
     Extended { remaining: i64 },
     BackupKey { key: String },
     WaState { configured: bool, enabled: bool, unlock_enabled: bool },
