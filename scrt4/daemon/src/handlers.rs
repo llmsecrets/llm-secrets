@@ -974,6 +974,33 @@ async fn handle_setup_local() -> Response {
         }
     }
 
+    // Enrolling a NEW unlock credential is the most privileged thing this
+    // daemon does, and it was the one sensitive handler with no step-up while
+    // six others (reveal, reveal_all, backup_key, disable_wa,
+    // disable_wa_unlock, rotate_vault) all required one.
+    //
+    // The credential this creates is a permanent, session-independent path to
+    // the vault: it outlives the session that authorised it, survives logout,
+    // and keeps working after a master-key rotation. An active session is
+    // therefore not sufficient authority for it — otherwise any process able to
+    // reach the daemon socket while the user happened to be unlocked could
+    // enrol its own authenticator and retain access indefinitely, with no
+    // visible symptom because the vault keeps working normally.
+    //
+    // Dev mode skips the gate, matching the six handlers above.
+    {
+        let mut session = get_session().write().await;
+        if !keystore::is_dev_mode() && !session.consume_wa_verification(WA_VERIFY_WINDOW_SECS) {
+            audit::log_event(
+                AuditEvent::new(EventType::AuthFailure, EventResult::Failure)
+                    .with_error("setup_local without a WebAuthn step-up")
+            );
+            return Response::error(
+                "WebAuthn verification required before enrolling a local credential"
+            );
+        }
+    }
+
     let engine = base64::engine::general_purpose::STANDARD;
 
     let prf_salt = webauthn::generate_prf_salt();
