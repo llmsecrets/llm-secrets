@@ -55,13 +55,13 @@ with accurate information than find out afterwards.
 
 This is an unfunded project. It has no revenue and no security budget.
 
-An earlier version of this policy published a table promising $500–$2,000 for a
-Critical. That table was aspirational — written before the programme had
-received a single report, and before we knew what we could stand behind. It has
-been replaced with figures we can actually honour. If you reported against the
-old table, contact us: we will not treat you as having missed a window.
+**There is no cash reward.** What we offer is recognition, and we try to offer it
+at full weight rather than as an apology for the absence of money. The detail is
+below, along with an honest account of why the payout table that used to sit here
+is gone.
 
-Here is what we can genuinely offer.
+If you reported against that old table, contact us — we will not treat you as
+having missed a window.
 
 ### Recognition — offered at full weight
 
@@ -70,7 +70,7 @@ than a consolation for the money.
 
 | | |
 |---|---|
-| **Featured highlight** | A dedicated security-researcher feature on llmsecrets.com — your name, the finding, and what changed because of it. Not a line in a list. |
+| **Front-page credit** | Your name and your finding on the front page of llmsecrets.com — not a buried credits page. This is the reward, not a consolation for the absence of one. |
 | **CVE** | Requested through a GitHub Security Advisory, formally crediting you. GitHub is a CNA, so the identifier is assigned directly. Permanent, indexed in the national vulnerability databases, citable indefinitely. |
 | **Advisory credit** | Your GitHub account in the advisory's structured Credits field, and an invitation onto the draft advisory before it is published. |
 | **Hall of Fame** | A permanent entry in this repository. |
@@ -91,29 +91,21 @@ its "patched versions" field becomes a true statement rather than an aspiration.
 **Anonymity is always available** — before, during or after — and choosing it
 costs you nothing else on this list.
 
-### Money — small, and stated honestly
+### Money — there isn't any, and we would rather say so
 
-| Severity | Payout |
-|---|---|
-| **Critical** | $50 |
-| **High / Medium / Low** | No cash payout at this time |
+**There is no cash reward.** This project has no revenue and no security budget.
 
-That is the real number. It is far below what this document used to claim, and
-we would rather give you an accurate figure than negotiate you down from a
-fictional one.
+An earlier version of this document promised $500–$2,000 for a Critical. We
+could not honour it. We are not going to replace that with a smaller figure we
+might also fail to pay, or with a share of revenue that does not exist — the
+mistake was publishing a number, not publishing the wrong number.
 
-**Why nothing for High:** this project is young and its High-severity surface is
-still wide. We cannot fund a bounty at that volume yet. This is *not* a signal
-that High findings are unwelcome — they are among the most useful reports we
-receive, they are fixed on the same timeline as Criticals, and they earn every
-item in the recognition list above.
+If that makes this programme not worth your time, we would much rather you knew
+before you started than after.
 
-We are obliged to confirm that recipients are not resident in a sanctioned
-jurisdiction. No identity verification is required at these amounts.
-
-If this project ever has funding behind it, we will revisit this table — and we
-will go back to the researchers who reported before it changed rather than
-treating them as having missed the window.
+If the project ever earns anything, we will revisit this — and we will go back
+to the people who reported before it changed, rather than treating them as
+having missed a window.
 
 ### What we will not do
 
