@@ -304,9 +304,43 @@ export -f _bg_if_gui
 # This is the only path through which CLI code reaches the daemon. All
 # vault and session state is owned by the daemon; the CLI is a thin
 # client that authenticates the user and shapes commands.
+# ── INV-SK-1: the session token ──────────────────────────────────────
+#
+# The daemon returns a token when it unlocks, and every request that touches
+# the unlocked session must present it. Stored beside the vault with umask 077.
+#
+# Worth being plain about what this is and is not: a same-user attacker can
+# read this file. It converts the attack from "open the socket" - which leaves
+# no artifact - into "read a specific named file", which is a discrete act on
+# a known path. It is not a boundary against a fully same-user adversary.
+SESSION_TOKEN_FILE="${CONFIG_DIR}/session.token"
+
+_save_session_token() {
+    local tok="$1"
+    [ -n "$tok" ] || return 0
+    ( umask 077; printf '%s' "$tok" > "$SESSION_TOKEN_FILE" ) 2>/dev/null || return 0
+}
+
+_clear_session_token() {
+    rm -f "$SESSION_TOKEN_FILE" 2>/dev/null || true
+}
+
+_load_session_token() {
+    [ -r "$SESSION_TOKEN_FILE" ] || return 0
+    cat "$SESSION_TOKEN_FILE" 2>/dev/null || true
+}
+
 send_request() {
     local json="$1"
     local timeout="${2:-10}"
+    # Attached to EVERY request. The client deliberately does not classify
+    # which methods need a token - session_binding::binding in the daemon is
+    # the single source of that decision, so the two cannot drift.
+    local _tok
+    _tok=$(_load_session_token)
+    if [ -n "$_tok" ] && command -v jq >/dev/null 2>&1; then
+        json=$(jq -c --arg t "$_tok" '. + {session_token:$t}' <<< "$json" 2>/dev/null) || json="$1"
+    fi
     # If the socket doesn't exist, tell the user instead of swallowing the
     # failure. This used to silently return empty, leaving callers with
     # "Setup failed: Unknown error" or (worse) no output at all.
@@ -634,6 +668,8 @@ run_unlock_flow() {
     if [ "$success" = "true" ]; then
         local count
         count=$(echo "$response" | jq -r '.data.count // 0')
+        # INV-SK-1: the daemon returns the session token here and ONLY here.
+        _save_session_token "$(echo "$response" | jq -r '.data.session_token // empty')"
         echo -e "${GREEN}Unlocked ${count} secret(s).${NC}"
     else
         local error
@@ -1300,6 +1336,9 @@ cmd_rotate() {
 #   - clear   (alias, same behaviour — listed in the v0.1.0 menu)
 cmd_logout() {
     send_request '{"method":"clear"}'
+    # The token is dead the moment the session is - keeping it on disk would
+    # leave a credential lying around that authenticates nothing.
+    _clear_session_token
 }
 
 # cmd_backup_vault [--local DIR] — tar the vault directory into a
