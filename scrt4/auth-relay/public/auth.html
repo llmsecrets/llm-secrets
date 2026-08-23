@@ -269,7 +269,20 @@
     let challengeB64 = pick('c');
     let saltB64 = pick('salt');
     let credIdB64 = pick('cred');
-    let wrappingKeyHex = pick('k');
+    // INV-RK-2: `k` is read from the FRAGMENT ONLY.
+    //
+    // Deliberately not pick(), which prefers the query - a query-supplied k
+    // would silently override the fragment, and a daemon that regressed to
+    // `?...&k=` would keep working instead of failing loudly. Accepting a query
+    // k is what removes the only detector.
+    const pickFragmentOnly = (name) => hashParams.get(name);
+    let wrappingKeyHex = pickFragmentOnly('k');
+    // INV-RK-3: fail closed. A key supplied in the query has already reached the
+    // server's request line and must be treated as burned, never used.
+    if (params.get('k')) {
+      wrappingKeyHex = null;
+      console.error('Refusing a wrapping key supplied in the URL query - it must be in the fragment (#k=).');
+    }
     let rpId = pick('rp') || 'auth.llmsecrets.com';
     let callbackUrl = pick('cb');
     let actionLabel = pick('a');
@@ -306,7 +319,7 @@
           challengeB64 = fpick('c');
           saltB64 = fpick('salt');
           credIdB64 = fpick('cred');
-          wrappingKeyHex = fpick('k');
+          wrappingKeyHex = fhp.get('k');   // fragment only here too
           rpId = fpick('rp') || 'auth.llmsecrets.com';
           callbackUrl = fpick('cb');
           actionLabel = fpick('a');
