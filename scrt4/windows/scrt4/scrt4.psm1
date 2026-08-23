@@ -10,7 +10,7 @@
 
 #  Constants / init 
 
-$script:Version = '0.4.0'
+$script:Version = '0.4.7'
 
 # Release channels. The published manifest is generated at the same moment the
 # artifact is uploaded, so its version and hash can never drift from the zip

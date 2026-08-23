@@ -2,7 +2,7 @@
 # Published to crates.io as `scrt4`; the binary it installs stays
 # `scrt4-daemon`, which is what the clients and the service units invoke.
 name = "scrt4"
-version = "0.4.6"
+version = "0.4.7"
 edition = "2021"
 rust-version = "1.74"
 description = "Hardware-bound secrets vault for AI coding agents. Secrets are injected into a subprocess and scrubbed from its output, so an agent can use a credential without ever seeing it. The vault key is derived from a FIDO2 authenticator via WebAuthn PRF and is never stored."
