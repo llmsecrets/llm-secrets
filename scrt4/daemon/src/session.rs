@@ -398,7 +398,7 @@ impl Session {
 
 
     /// The active session's token, base64, for handing back to the client that
-    /// unlocked it (INV-SK-1).
+    /// unlocked it.
     ///
     /// ⚠️ This is the ONLY way the token leaves the daemon, and it is called on
     /// exactly one path: the response to a successful unlock, delivered over the
@@ -412,7 +412,7 @@ impl Session {
             .map(|t| base64::engine::general_purpose::STANDARD.encode(t))
     }
 
-    /// Does `presented` match the active session's token? (INV-SK-1)
+    /// Does `presented` match the active session's token?
     ///
     /// Fails closed on every path: no active session, malformed base64, wrong
     /// length and wrong bytes all return `false`, and the caller reports one

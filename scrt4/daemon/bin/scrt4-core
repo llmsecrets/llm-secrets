@@ -304,7 +304,7 @@ export -f _bg_if_gui
 # This is the only path through which CLI code reaches the daemon. All
 # vault and session state is owned by the daemon; the CLI is a thin
 # client that authenticates the user and shapes commands.
-# ── INV-SK-1: the session token ──────────────────────────────────────
+# ── the session token ──────────────────────────────────────
 #
 # The daemon returns a token when it unlocks, and every request that touches
 # the unlocked session must present it. Stored beside the vault with umask 077.
@@ -668,7 +668,7 @@ run_unlock_flow() {
     if [ "$success" = "true" ]; then
         local count
         count=$(echo "$response" | jq -r '.data.count // 0')
-        # INV-SK-1: the daemon returns the session token here and ONLY here.
+        # the daemon returns the session token here and ONLY here.
         _save_session_token "$(echo "$response" | jq -r '.data.session_token // empty')"
         echo -e "${GREEN}Unlocked ${count} secret(s).${NC}"
     else

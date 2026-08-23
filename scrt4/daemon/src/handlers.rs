@@ -80,7 +80,7 @@ async fn handle_request(line: &str) -> Response {
         }
     };
 
-    // INV-SK-1: a request that uses the unlocked session must present the token
+    // a request that uses the unlocked session must present the token
     // minted when it was unlocked. Checked HERE, once, ahead of the dispatch —
     // not inside each handler — so a handler cannot be added without the check,
     // and so the classification lives in exactly one place
@@ -107,10 +107,10 @@ async fn handle_request(line: &str) -> Response {
             // then `run`) that this layer exists to break.
             audit::log_event(
                 AuditEvent::new(EventType::AuthFailure, EventResult::Failure)
-                    .with_error("session token missing or invalid (INV-SK-1)")
+                    .with_error("session token missing or invalid")
             );
             tracing::warn!(
-                "refused a request that requires the session token (INV-SK-1); \
+                "refused a request that requires the session token; \
                  token_presented={}",
                 envelope.session_token.is_some()
             );
@@ -745,7 +745,7 @@ async fn handle_unlock_webauthn_complete(
             );
             Response::ok_with_data(ResponseData::Unlocked {
                 count,
-                // INV-SK-1: the only path the token leaves the daemon by.
+                // the only path the token leaves the daemon by.
                 session_token: session.token_b64(),
             })
         }
@@ -1006,7 +1006,7 @@ async fn handle_unlock_local_complete(ttl: Option<u64>) -> Response {
             );
             Response::ok_with_data(ResponseData::Unlocked {
                 count,
-                // INV-SK-1: the only path the token leaves the daemon by.
+                // the only path the token leaves the daemon by.
                 session_token: session.token_b64(),
             })
         }

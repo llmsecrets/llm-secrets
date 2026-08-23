@@ -2,7 +2,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// The wire envelope that carries the session token (INV-SK-1).
+/// The wire envelope that carries the session token.
 ///
 /// Parsed SEPARATELY from `Request` so the token authenticates the CHANNEL
 /// while the request describes the OPERATION. Keeping them apart means a
@@ -235,7 +235,7 @@ pub enum ResponseData {
     RevealAll { secrets: HashMap<String, String> },
     Unlocked {
         count: usize,
-        /// INV-SK-1: the session token, returned ONLY here — on the
+        /// the session token, returned ONLY here — on the
         /// connection that performed the unlock ceremony. Never in
         /// `status`, an error, or a log line.
         #[serde(skip_serializing_if = "Option::is_none")]

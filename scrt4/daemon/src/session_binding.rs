@@ -8,7 +8,7 @@
 //
 // ━━━ Why this exists ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //
-// Reported externally as S4-006. The daemon held ONE global session and
+// Reported externally as The daemon held ONE global session and
 // `handle_connection` carried no per-connection state, so every connection was
 // equally entitled to it. The reporter's proof of concept is three steps:
 //
@@ -55,14 +55,14 @@
 //
 // ━━━ Invariants ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //
-//  INV-SK-1  Every request classified `Required` is refused unless it presents
+//  Every request classified `Required` is refused unless it presents
 //            a token that matches the active session's, compared in constant
 //            time. Absent token, wrong token and no-active-session all fail
 //            CLOSED and are indistinguishable to the caller.
-//  INV-SK-4  The classification is total. `binding` matches every `Request`
+//  The classification is total. `binding` matches every `Request`
 //            variant explicitly with no wildcard arm, so a NEW method does not
 //            compile until someone decides whether it needs the token.
-//  INV-SK-5  Every exemption carries a written reason. `Exempt` cannot be
+//  Every exemption carries a written reason. `Exempt` cannot be
 //            constructed without one, so "why is this open?" is answerable
 //            from the code rather than from memory.
 
@@ -70,7 +70,7 @@ use crate::protocol::Request;
 
 /// Whether a request may be served without presenting the session token.
 ///
-/// `Exempt` carries the reason (INV-SK-5). It is a `&'static str` so the
+/// `Exempt` carries the reason. It is a `&'static str` so the
 /// justification lives at the exemption site and travels with it; the verify
 /// script prints these, which makes an unjustifiable exemption visible in
 /// review rather than only at exploit time.
@@ -93,7 +93,7 @@ impl Binding {
     }
 }
 
-/// Does this request need the session token? (INV-SK-4)
+/// Does this request need the session token?
 ///
 /// ⛔ Deliberately has NO wildcard arm. Adding a `Request` variant breaks this
 /// match, and the compiler error is the point: a new method that touches an
@@ -111,13 +111,13 @@ impl Binding {
 /// correct, since every `Exempt` arm sits above the accidental wildcard and
 /// `match` is ordered, so the wildcard only ever returned `Required` to things
 /// that wanted `Required`. Every test below passed. What it destroyed was
-/// INV-SK-4 itself — a newly added variant would have been silently swallowed
+/// itself — a newly added variant would have been silently swallowed
 /// by the wildcard and shipped as `Required`-by-accident rather than failing to
 /// compile. A guard that has quietly stopped guarding, while all its tests stay
 /// green, is the exact failure this module is supposed to be immune to.
 ///
 /// Qualifying the path turns that same mistake into a hard compile error, which
-/// is the only reason INV-SK-4 is worth anything.
+/// is the only reason is worth anything.
 pub fn binding(req: &Request) -> Binding {
     // Reasons are shared where the justification is genuinely the same one, so
     // that changing the rationale changes it everywhere it was relied on.
@@ -202,11 +202,11 @@ mod tests {
         requires_token(&req(v))
     }
 
-    // ── INV-SK-1: the reported attack ─────────────────────────────────────
+    // ── the reported attack ─────────────────────────────────────
 
     #[test]
     fn the_reported_run_exfiltration_needs_a_token() {
-        // S4-006 step 3: client B, holding no token, ran
+        // step 3: client B, holding no token, ran
         //   printf %s $env[SECRET] | base64
         // and got the value back past the sanitizer. `run` is the whole PoC.
         assert!(bound(json!({"method":"run","params":{"command":"printf %s $env[S] | base64"}})));
@@ -270,7 +270,7 @@ mod tests {
         assert!(why.contains("liveness"), "reason should explain the trade-off: {}", why);
     }
 
-    // ── INV-SK-5: no silent exemptions ────────────────────────────────────
+    // ── no silent exemptions ────────────────────────────────────
 
     #[test]
     fn every_exemption_carries_a_nonempty_reason() {
