@@ -24,18 +24,13 @@ If you discover a security vulnerability in scrt4, **please report it responsibl
 | Fix for Medium/Low | 30 days |
 | Public disclosure | After fix is released (coordinated with reporter) |
 
-### Bounty Rewards
+### Rewards
 
-Valid, original vulnerability reports are eligible for rewards:
+The reward terms for this programme are published in the security policy at the
+repository root: **[SECURITY.md](../SECURITY.md#rewards)**.
 
-| Severity | Payout | Examples |
-|----------|--------|----------|
-| **Critical** | $500 - $2,000 | Bypass WebAuthn to reveal secret values; master key extraction without authenticator; remote code execution via socket protocol |
-| **High** | $200 - $500 | Socket-level authentication bypass; vault decryption without PRF output; session hijacking across daemon restarts |
-| **Medium** | $50 - $200 | Timing attacks on challenge codes; WA verification window race conditions; audit log tampering or bypass |
-| **Low** | $25 - $50 | Secret name disclosure without values; information leaks in error messages; denial of service against daemon |
-
-Payouts are at the maintainer's discretion based on impact, quality of report, and exploitability. Bonus for high-quality reports with working PoC.
+That is the canonical version. The table that used to appear here quoted figures
+the project could not honour, and has been withdrawn rather than left standing.
 
 ---
 
