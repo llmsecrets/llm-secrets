@@ -269,7 +269,7 @@
     let challengeB64 = pick('c');
     let saltB64 = pick('salt');
     let credIdB64 = pick('cred');
-    // INV-RK-2: `k` is read from the FRAGMENT ONLY.
+    // `k` is read from the FRAGMENT ONLY.
     //
     // Deliberately not pick(), which prefers the query - a query-supplied k
     // would silently override the fragment, and a daemon that regressed to
@@ -277,7 +277,7 @@
     // k is what removes the only detector.
     const pickFragmentOnly = (name) => hashParams.get(name);
     let wrappingKeyHex = pickFragmentOnly('k');
-    // INV-RK-3: fail closed. A key supplied in the query has already reached the
+    // Fail closed. A key supplied in the query has already reached the
     // server's request line and must be treated as burned, never used.
     if (params.get('k')) {
       wrappingKeyHex = null;
