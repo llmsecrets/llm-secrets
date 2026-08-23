@@ -303,13 +303,13 @@ pub fn generate_register_params() -> Result<RelaySetupParams, String> {
     rand::thread_rng().fill_bytes(&mut challenge_bytes);
 
     let url = format!(
-        "{}?m=register&s={}&c={}&salt={}&k={}&rp={}",
+        "{}?m=register&s={}&c={}&salt={}&rp={}#k={}",
         AUTH_PAGE_BASE,
         session_id,
         engine.encode(challenge_bytes),
         engine.encode(&prf_salt),
-        wrapping_key,
-        "auth.llmsecrets.com"
+        "auth.llmsecrets.com",
+        wrapping_key
     );
 
     Ok(RelaySetupParams {
@@ -332,14 +332,14 @@ pub fn generate_auth_params(
     rand::thread_rng().fill_bytes(&mut challenge_bytes);
 
     let url = format!(
-        "{}?m=auth&s={}&c={}&salt={}&cred={}&k={}&rp={}",
+        "{}?m=auth&s={}&c={}&salt={}&cred={}&rp={}#k={}",
         AUTH_PAGE_BASE,
         session_id,
         engine.encode(challenge_bytes),
         engine.encode(salt),
         &credential.credential_id,
-        wrapping_key,
-        "auth.llmsecrets.com"
+        "auth.llmsecrets.com",
+        wrapping_key
     );
 
     Ok(RelaySetupParams {
