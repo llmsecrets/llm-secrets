@@ -190,6 +190,25 @@ _has_gui() {
     command -v zenity >/dev/null 2>&1 || return 1
     [ -n "${DISPLAY:-}" ] || [ -n "${WAYLAND_DISPLAY:-}" ]
 }
+
+# _has_desktop — is there a desktop that can show a browser window?
+#
+# Deliberately NOT _has_gui. That one asks a narrower question — "can I pop a
+# zenity dialog" — and answers it with zenity + $DISPLAY/$WAYLAND_DISPLAY, both
+# of which are X11/Wayland notions. macOS has neither, so _has_gui is false on
+# every Mac, and gating a browser launch on it silently skips the browser on the
+# one platform whose only local authenticator is Touch ID.
+_has_desktop() {
+    [ "${SCRT4_NO_GUI:-0}" = "1" ] && return 1
+    case "$(uname -s 2>/dev/null || echo unknown)" in
+        Darwin) return 0 ;;
+    esac
+    # WSL reaches the Windows shell, so a browser is available there too.
+    if command -v wslpath >/dev/null 2>&1 && command -v cmd.exe >/dev/null 2>&1; then
+        return 0
+    fi
+    [ -n "${DISPLAY:-}" ] || [ -n "${WAYLAND_DISPLAY:-}" ]
+}
 export -f _has_gui
 
 # ── Standard panel helpers (scrt4 GUI contract) ──────────────────────
@@ -723,6 +742,24 @@ run_setup_flow() {
     echo -e "  Then tap 'Register Passkey' on the page."
     echo ""
 
+    # Also open the page on THIS machine, so a platform passkey (Touch ID,
+    # Windows Hello) can complete the ceremony without a phone. The Windows
+    # client has always done this; the Unix client only ever printed the QR,
+    # which is why `setup` on a Mac never reached Touch ID.
+    #
+    # full_url, not url: the wrapping key rides in the fragment, and a local
+    # browser needs it. The QR keeps using the same value, so nothing about
+    # what the phone receives changes.
+    #
+    # Agent mode is excluded — it can't see a browser window, and its whole
+    # purpose is a scrapeable terminal QR.
+    if [ "$FORCE_CLI" = false ] && _has_desktop; then
+        open_ceremony_browser "$full_url"
+        echo -e "  ${CYAN}(opened in your browser — use Touch ID / Windows Hello there,${NC}" >&2
+        echo -e "  ${CYAN} or scan the QR with your phone)${NC}" >&2
+        echo "" >&2
+    fi
+
     local payload=""
     if [ "$FORCE_CLI" = false ] && _has_gui; then
         payload=$(poll_relay_gui "$session_id" "$url") || {
@@ -1151,7 +1188,12 @@ cmd_setup() {
         case "$1" in
             --local)     use_local=true; shift ;;
             --agent)     AGENT_MODE=true; FORCE_CLI=true; shift ;;
-            --cli|agent) FORCE_CLI=true; shift ;;
+            # The bare `agent` submode is gone: the command is just `scrt4
+            # setup`. `--agent` still exists for AI-agent callers that need the
+            # terminal QR, and a stray `agent` argument now falls through to the
+            # catch-all below, so `scrt4 setup agent` still works and simply
+            # means `scrt4 setup`.
+            --cli)       FORCE_CLI=true; shift ;;
             *)           shift ;;
         esac
     done
@@ -2705,7 +2747,7 @@ cmd_llm() {
                 cloud_crypt_auth: $cc_auth
               },
               setup_commands: {
-                register_passkey:           "scrt4 setup agent",
+                register_passkey:           "scrt4 setup --agent",
                 unlock:                     "scrt4 unlock",
                 cloud_crypt_auth_gws:       "scrt4 cloud-crypt auth setup --from-gws",
                 cloud_crypt_auth_existing:  "scrt4 cloud-crypt auth setup --from-secret personal_google_workspace",
