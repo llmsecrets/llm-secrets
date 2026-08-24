@@ -449,6 +449,16 @@ function Invoke-Scrt4RelaySetup {
 # run_setup_local_flow -- add a localhost-rpId credential (Windows Hello)
 # that wraps the EXISTING master key. Requires an active session.
 function Invoke-Scrt4LocalSetup {
+    # Enrolling a credential requires its own step-up, because the credential
+    # this creates outlives the session that authorised it. The gate tries the
+    # local authenticator first and falls back to the phone, which is the path
+    # that applies here: on a machine with no local credential yet, the phone is
+    # the only authenticator available.
+    if (-not (Invoke-Scrt4WaGate)) {
+        Write-Err 'setup --local cancelled: enrolling a credential needs approval first.'
+        return $false
+    }
+
     $resp = $null
     try { $resp = Send-Scrt4Request @{ method = 'setup_local' } } catch {
         Write-Err "Setup failed: $($_.Exception.Message)"
