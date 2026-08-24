@@ -831,6 +831,16 @@ open_ceremony_browser() {
 
 # run_setup_local_flow — enrol this machine's authenticator.
 run_setup_local_flow() {
+    # Enrolling a credential now requires its own step-up, because the
+    # credential this creates outlives the session that authorised it. The gate
+    # tries the local authenticator first and falls back to the phone, which is
+    # the path that applies here: on a machine with no local credential yet,
+    # the phone is the only authenticator available.
+    _wa_gate || {
+        echo -e "${RED}setup --local cancelled: enrolling a credential needs approval first.${NC}" >&2
+        return 1
+    }
+
     local start
     start=$(send_request '{"method":"setup_local"}' 2>/dev/null || true)
     if [ "$(echo "$start" | jq -r '.success // false' 2>/dev/null)" != "true" ]; then
