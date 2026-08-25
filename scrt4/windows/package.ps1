@@ -52,7 +52,36 @@ $ErrorActionPreference = 'Stop'
 $running = Get-Process -Name 'scrt4-daemon' -ErrorAction SilentlyContinue
 if ($running) {
     Write-Host 'Stopping running scrt4-daemon...' -ForegroundColor Yellow
-    $running | Stop-Process -Force; Start-Sleep -Milliseconds 500
+    # Stop each daemon on its own, and do not let one failure abort the install.
+    # $ErrorActionPreference is 'Stop' in this script, so `$running |
+    # Stop-Process -Force` used to throw on the FIRST process it could not kill
+    # -- typically one started from an elevated shell, which a normal user
+    # cannot touch -- and terminate the installer right here, before a single
+    # file was copied. All the caller saw was "Installer exited with code 1",
+    # with nothing said about which process or what to do about it.
+    $stuck = @()
+    foreach ($proc in @($running)) {
+        try { Stop-Process -Id $proc.Id -Force -ErrorAction Stop }
+        catch { $stuck += $proc }
+    }
+    Start-Sleep -Milliseconds 500
+    if ($stuck.Count -gt 0) {
+        Write-Host ''
+        Write-Host 'Could not stop these scrt4-daemon processes:' -ForegroundColor Red
+        foreach ($proc in $stuck) {
+            $when = 'unknown start time'
+            try { $when = 'started ' + $proc.StartTime.ToString('yyyy-MM-dd HH:mm') } catch { }
+            Write-Host ("  PID {0}  ({1})" -f $proc.Id, $when) -ForegroundColor Red
+        }
+        $ids = ($stuck | ForEach-Object { $_.Id }) -join ','
+        Write-Host ''
+        Write-Host 'They are almost certainly running elevated. In an Administrator terminal:' -ForegroundColor Yellow
+        Write-Host ("  Stop-Process -Id {0} -Force" -f $ids) -ForegroundColor Yellow
+        Write-Host 'then run this installer again.' -ForegroundColor Yellow
+        Write-Host ''
+        Write-Host 'Nothing was changed; your existing install is intact.' -ForegroundColor Yellow
+        exit 1
+    }
 }
 
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
