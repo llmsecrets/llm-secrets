@@ -354,7 +354,7 @@ main() {
     printf '\n' >&2
     printf '\033[0;32mscrt4-native: installed.\033[0m\n' >&2
     printf 'Next:\n' >&2
-    printf '  1. scrt4 setup agent     # enroll your FIDO2 authenticator\n' >&2
+    printf '  1. scrt4 setup           # enroll your passkey (Touch ID / Hello / phone)\n' >&2
     printf '  2. scrt4 unlock          # 20-hour session\n' >&2
     printf '  3. scrt4 quickstart      # readiness snapshot\n' >&2
     printf '  4. scrt4 help            # full command list\n' >&2
