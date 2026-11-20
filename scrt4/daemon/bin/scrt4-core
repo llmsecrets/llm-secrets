@@ -369,7 +369,7 @@ send_request() {
         return 1
     fi
     if command -v socat >/dev/null 2>&1; then
-        echo "$json" | socat - UNIX-CONNECT:"$SOCKET" 2>/dev/null
+        echo "$json" | socat -t "$timeout" - UNIX-CONNECT:"$SOCKET" 2>/dev/null
     else
         python3 -c "
 import socket, sys
@@ -951,6 +951,8 @@ run_unlock_local_flow() {
     done_resp=$(send_request "$(jq -nc --argjson t "$ttl" '{method:"unlock_local_complete",params:{ttl:$t}}')" 180 2>/dev/null || true)
     echo "" >&2
     if [ "$(echo "$done_resp" | jq -r '.success // false' 2>/dev/null)" = "true" ]; then
+        # the daemon returns the session token here too; without it every later command refuses.
+        _save_session_token "$(echo "$done_resp" | jq -r '.data.session_token // empty')"
         echo -e "${GREEN}Session active.${NC}" >&2
         return 0
     fi
