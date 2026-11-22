@@ -707,14 +707,14 @@ async fn handle_unlock_webauthn_complete(
         Err(e) => return Response::error(format!("Failed to decrypt master key: {}", e)),
     };
 
-    // Log vault file info for debugging
+    // Log the vault file's size for debugging, never its contents: even
+    // encrypted, a copy in the log lands in the journal, backups and support
+    // bundles, outside the vault's own file permissions.
     {
         let vault_path = keystore::secrets_path();
-        if let Ok(contents) = std::fs::read_to_string(&vault_path) {
-            tracing::info!("Vault file ({} bytes): {}", contents.len(),
-                &contents[..contents.len().min(80)]);
-        } else {
-            tracing::warn!("Cannot read vault file at {:?}", vault_path);
+        match std::fs::metadata(&vault_path) {
+            Ok(m) => tracing::info!("Vault file: {} bytes", m.len()),
+            Err(_) => tracing::warn!("Cannot read vault file at {:?}", vault_path),
         }
     }
 
