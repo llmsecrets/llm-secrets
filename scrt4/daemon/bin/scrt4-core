@@ -1330,16 +1330,36 @@ cmd_cleanup_encrypted() {
 cmd_rotate() {
     ensure_unlocked || return 1
 
-    # Step-up is enforced daemon-side; call _wa_gate here too so the
-    # client surfaces the prompt before the RPC comes back with a
-    # step-up-required error.
-    _wa_gate || {
-        echo -e "${RED}Step-up cancelled; vault rotation aborted.${NC}" >&2
-        return 1
-    }
+    local response="" via_local=false
 
-    local response
-    response=$(send_request '{"method":"rotate_vault"}' 30)
+    # With a local passkey, rotation runs its own ceremony: the approval is the
+    # step-up, and the daemon re-wraps the passkey's copy of the key under the
+    # NEW master key, so the passkey keeps opening the vault afterwards.
+    local start
+    start=$(send_request '{"method":"rotate_vault_local"}' 2>/dev/null || true)
+    if [ "$(echo "$start" | jq -r '.success // false' 2>/dev/null)" = "true" ]; then
+        local url
+        url=$(echo "$start" | jq -r '.data.url // empty' 2>/dev/null)
+        echo -e "${CYAN}Approve the vault rotation with your passkey...${NC}" >&2
+        open_browser "$url"
+        echo -e "  ${CYAN}URL:${NC} ${url}" >&2
+        echo -e "  Authenticate in the browser window." >&2
+        echo "" >&2
+        echo -ne "  ${CYAN}Waiting for authentication...${NC}" >&2
+        response=$(send_request '{"method":"rotate_vault_local_complete"}' 180 2>/dev/null || true)
+        echo "" >&2
+        via_local=true
+    else
+        # No local passkey (or an older daemon): step-up first, then rotate.
+        # Step-up is enforced daemon-side; call _wa_gate here too so the
+        # client surfaces the prompt before the RPC comes back with a
+        # step-up-required error.
+        _wa_gate || {
+            echo -e "${RED}Step-up cancelled; vault rotation aborted.${NC}" >&2
+            return 1
+        }
+        response=$(send_request '{"method":"rotate_vault"}' 30)
+    fi
     local ok
     ok=$(echo "$response" | jq -r '.success // false')
     if [ "$ok" != "true" ]; then
@@ -1354,6 +1374,9 @@ cmd_rotate() {
 
     echo -e "${GREEN}Vault rotated.${NC}"
     echo "  Secrets re-encrypted: ${count}"
+    if [ "$via_local" = true ]; then
+        echo "  This device's passkey now opens the new key."
+    fi
 
     if [ "$wrapper_stale" = "true" ]; then
         echo ""

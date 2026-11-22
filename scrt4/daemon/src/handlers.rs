@@ -159,6 +159,8 @@ async fn handle_request(line: &str) -> Response {
 
 
         Request::RotateVault => handle_rotate_vault().await,
+        Request::RotateVaultLocal => handle_rotate_vault_local().await,
+        Request::RotateVaultLocalComplete => handle_rotate_vault_local_complete().await,
 
         // ── Core: Encrypted-folder inventory (F027, F028) ───────
         Request::RegisterEncrypted { path, folder_name, file_count, archive_size } =>
@@ -948,6 +950,7 @@ async fn handle_unlock_local(_ttl: Option<u64>) -> Response {
         server,
         wrapping_key,
         prf_salt_b64: salt_b64,
+        purpose: localhost::LocalPurpose::Unlock,
     }).await;
 
     tracing::info!("Unlock local phase 1: server started at {}", url);
@@ -956,9 +959,9 @@ async fn handle_unlock_local(_ttl: Option<u64>) -> Response {
 
 /// Unlock via localhost browser — phase 2: wait for callback, decrypt, unlock
 async fn handle_unlock_local_complete(ttl: Option<u64>) -> Response {
-    let mut pending = match localhost::take_pending().await {
-        Some(p) => p,
-        None => return Response::error("No pending local auth — call unlock_local first"),
+    let mut pending = match take_pending_for(localhost::LocalPurpose::Unlock).await {
+        Ok(p) => p,
+        Err(e) => return Response::error(format!("{} — call unlock_local first", e)),
     };
 
     let encrypted_payload = match pending.server.wait_for_callback(120).await {
@@ -1082,6 +1085,7 @@ async fn handle_setup_local() -> Response {
         server,
         wrapping_key,
         prf_salt_b64,
+        purpose: localhost::LocalPurpose::Register,
     }).await;
 
     tracing::info!("Setup local phase 1: server started at {}", url);
@@ -1099,9 +1103,9 @@ async fn handle_setup_local_complete() -> Response {
         }
     };
 
-    let mut pending = match localhost::take_pending().await {
-        Some(p) => p,
-        None => return Response::error("No pending local auth — call setup_local first"),
+    let mut pending = match take_pending_for(localhost::LocalPurpose::Register).await {
+        Ok(p) => p,
+        Err(e) => return Response::error(format!("{} — call setup_local first", e)),
     };
 
     let encrypted_payload = match pending.server.wait_for_callback(120).await {
@@ -1248,6 +1252,209 @@ async fn handle_rotate_vault() -> Response {
 
     tracing::warn!(
         "Vault rotated: secret_count={} wrapper_stale={}",
+        secret_count,
+        wrapper_stale
+    );
+
+    Response::ok_with_data(ResponseData::VaultRotated {
+        new_master_key_b64: new_master_key,
+        secret_count,
+        wrapper_stale,
+    })
+}
+
+/// Take the pending local ceremony only if it was started for `purpose`.
+/// A ceremony started for something else is closed, not handed over: an
+/// approval the user gave for one action is never spent on another.
+async fn take_pending_for(
+    purpose: localhost::LocalPurpose,
+) -> Result<localhost::PendingLocalAuth, String> {
+    match localhost::take_pending().await {
+        Some(p) if p.purpose == purpose => Ok(p),
+        Some(mut other) => {
+            other.server.shutdown();
+            Err(format!(
+                "The pending local approval was started for {:?}, not {:?}",
+                other.purpose, purpose
+            ))
+        }
+        None => Err("No pending local auth".to_string()),
+    }
+}
+
+// Two-phase rotation with the local passkey.
+//
+// `rotate_vault` leaves every key wrapper stale: the passkey still unwraps the
+// OLD master key, so once the session ends the vault cannot be opened, and
+// every step-up fails before that, because the gate's ceremony has to unwrap
+// the key too. Re-wrapping needs the passkey's PRF output, which only a live
+// ceremony produces. So this rotation runs its own ceremony:
+//
+//   phase 1  start the approval page (the same page as unlock_local)
+//   phase 2  wait for the approval; check the passkey unwraps the CURRENT key
+//            (proves the authenticator, and that its wrapper is not already
+//            stale); write the vault under a new key; re-wrap
+//            master-local.key under the new key with the same PRF output and
+//            salt. If the re-wrap fails, the vault is put back under the old
+//            key, so the passkey and the vault never disagree.
+//
+// The ceremony is the step-up, so no separate gate approval is spent and the
+// session (and its token) is left as it is. The PRF output lives only in this
+// call. master.key (the phone's wrapper) cannot be re-wrapped from a local
+// ceremony; when it exists the response says it is stale, as rotate_vault does.
+
+/// Rotate with the local passkey — phase 1: start the approval page.
+async fn handle_rotate_vault_local() -> Response {
+    {
+        let session = get_session().read().await;
+        if !session.is_active() {
+            return Response::error("No active session");
+        }
+        if session.master_key().is_none() {
+            return Response::error("No master key in session");
+        }
+    }
+    if !webauthn::is_local_configured() {
+        return Response::error("No localhost credential. Run 'scrt4 setup --local' first.");
+    }
+    let credential = match webauthn::load_local_credential() {
+        Ok(c) => c,
+        Err(e) => return Response::error(format!("Failed to load localhost credential: {}", e)),
+    };
+    let prf_salt = match keystore::load_prf_salt_local() {
+        Ok(s) => s,
+        Err(e) => return Response::error(format!("Failed to load local PRF salt: {}", e)),
+    };
+
+    let engine = base64::engine::general_purpose::STANDARD;
+    let salt_b64 = base64::Engine::encode(&engine, &prf_salt);
+    let wrapping_key = webauthn::generate_hex_public(32);
+    let mut challenge_bytes = [0u8; 32];
+    rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut challenge_bytes);
+    let challenge_b64 = base64::Engine::encode(&engine, challenge_bytes);
+
+    let server = match localhost::start(
+        "auth",
+        &challenge_b64,
+        &salt_b64,
+        &wrapping_key,
+        Some(&credential.credential_id),
+    ).await {
+        Ok(s) => s,
+        Err(e) => return Response::error(format!("Failed to start local server: {}", e)),
+    };
+    let url = server.url.clone();
+
+    localhost::set_pending(localhost::PendingLocalAuth {
+        server,
+        wrapping_key,
+        prf_salt_b64: salt_b64,
+        purpose: localhost::LocalPurpose::Rotate,
+    }).await;
+
+    tracing::info!("Rotate local phase 1: server started at {}", url);
+    Response::ok_with_data(ResponseData::LocalUrl { url })
+}
+
+/// Rotate with the local passkey — phase 2: approve, rotate, re-wrap.
+async fn handle_rotate_vault_local_complete() -> Response {
+    let mut pending = match take_pending_for(localhost::LocalPurpose::Rotate).await {
+        Ok(p) => p,
+        Err(e) => return Response::error(format!("{} — call rotate_vault_local first", e)),
+    };
+
+    // Wait for the approval WITHOUT holding the session lock: the user may take
+    // a while, and every other request needs the session meanwhile.
+    let encrypted_payload = match pending.server.wait_for_callback(120).await {
+        Ok(p) => p,
+        Err(e) => {
+            pending.server.shutdown();
+            return Response::error(e);
+        }
+    };
+    pending.server.shutdown();
+
+    let auth_result = match webauthn::complete_authentication_local(&encrypted_payload, &pending.wrapping_key) {
+        Ok(r) => r,
+        Err(e) => return Response::error(format!("WebAuthn auth failed: {}", e)),
+    };
+    let prf_salt = match keystore::load_prf_salt_local() {
+        Ok(s) => s,
+        Err(e) => return Response::error(format!("Failed to load local PRF salt: {}", e)),
+    };
+    let credential_id = match webauthn::load_local_credential() {
+        Ok(c) => c.credential_id,
+        Err(e) => return Response::error(format!("Failed to load localhost credential: {}", e)),
+    };
+    let unwrapped = match keystore::load_master_key_local(&auth_result.prf_output) {
+        Ok(k) => k,
+        Err(e) => return Response::error(format!("Failed to decrypt master key: {}", e)),
+    };
+
+    let mut session = get_session().write().await;
+    if !session.is_active() {
+        return Response::error("No active session");
+    }
+    let old_master_key = match session.master_key() {
+        Some(k) => k.to_string(),
+        None => return Response::error("No master key in session"),
+    };
+    if unwrapped != old_master_key {
+        audit::log_event(
+            AuditEvent::new(EventType::AuthFailure, EventResult::Failure)
+                .with_error("rotate_vault_local: the local passkey does not open the current vault key")
+        );
+        return Response::error(
+            "This passkey's stored key does not match the open vault (it is stale). Nothing was changed. \
+             Re-enrol it with 'scrt4 setup --local', or save the key with 'scrt4 backup-key' first.",
+        );
+    }
+
+    let current_secrets = match session.secrets() {
+        Some(s) => s.clone(),
+        None => return Response::error("No secrets in session"),
+    };
+    let secret_count = current_secrets.len();
+
+    let new_master_key = match keystore::generate_new_master_key() {
+        Ok(k) => k,
+        Err(e) => return Response::error(format!("Failed to generate new master key: {}", e)),
+    };
+
+    if let Err(e) = keystore::save_encrypted_env(&current_secrets, &new_master_key) {
+        return Response::error(format!("Failed to write rotated vault: {}", e));
+    }
+    if let Err(e) = keystore::save_master_key_local(
+        &new_master_key,
+        &auth_result.prf_output,
+        &prf_salt,
+        Some(&credential_id),
+    ) {
+        // Put the vault back under the key the passkey still opens.
+        let restored = keystore::save_encrypted_env(&current_secrets, &old_master_key);
+        tracing::error!("Rotate local: re-wrap failed ({}); vault restored: {}", e, restored.is_ok());
+        return Response::error(if restored.is_ok() {
+            format!("Failed to re-wrap the local passkey's key ({}). The vault was put back under the old key; nothing changed.", e)
+        } else {
+            format!("Failed to re-wrap the local passkey's key ({}), and the vault could not be put back. Do not end this session: run 'scrt4 backup-key' now.", e)
+        });
+    }
+
+    session.set_master_key(new_master_key.clone());
+    drop(session);
+
+    // The phone's wrapper cannot be re-wrapped from a local ceremony.
+    let wrapper_stale = keystore::master_key_path().exists();
+
+    audit::log_event(
+        AuditEvent::new(EventType::SecretsAdded, EventResult::Success)
+            .with_error(&format!(
+                "VaultRotated via=localhost secret_count={} local_rewrapped=true wrapper_stale={}",
+                secret_count, wrapper_stale
+            ))
+    );
+    tracing::warn!(
+        "Vault rotated with the local passkey: secret_count={} local passkey re-wrapped, master.key stale={}",
         secret_count,
         wrapper_stale
     );

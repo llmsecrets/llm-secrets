@@ -63,10 +63,21 @@ impl Drop for LocalServer {
 
 // ── Pending state (shared between handler calls) ────────────────────
 
+/// What a pending ceremony was started for. A completion handler only takes a
+/// ceremony started for its own purpose, so an approval given for one action
+/// cannot be spent on another (an unlock approval cannot rotate the vault).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LocalPurpose {
+    Unlock,
+    Register,
+    Rotate,
+}
+
 pub struct PendingLocalAuth {
     pub server: LocalServer,
     pub wrapping_key: String,
     pub prf_salt_b64: String,
+    pub purpose: LocalPurpose,
 }
 
 static PENDING: std::sync::OnceLock<Mutex<Option<PendingLocalAuth>>> = std::sync::OnceLock::new();

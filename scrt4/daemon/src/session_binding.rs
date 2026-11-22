@@ -166,6 +166,8 @@ pub fn binding(req: &Request) -> Binding {
         Request::Extend { .. } => Binding::Required,
         Request::BackupKey => Binding::Required,
         Request::RotateVault => Binding::Required,
+        Request::RotateVaultLocal => Binding::Required,
+        Request::RotateVaultLocalComplete => Binding::Required,
 
         Request::DisableWa => Binding::Required,
         Request::EnableWa => Binding::Required,
@@ -307,5 +309,12 @@ mod tests {
             "initialize_keys_webauthn", "check_wa_state",
         ];
         assert_eq!(exempt.len(), 13, "the exempt set changed — justify it");
+    }
+
+    #[test]
+    fn local_rotation_needs_a_token() {
+        // it re-encrypts the vault and re-wraps a credential's key file: never session-free
+        assert!(bound(json!({"method":"rotate_vault_local"})));
+        assert!(bound(json!({"method":"rotate_vault_local_complete"})));
     }
 }

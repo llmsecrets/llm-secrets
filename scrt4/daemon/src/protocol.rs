@@ -170,10 +170,22 @@ pub enum Request {
     // caller is responsible for immediately backing up the new key
     // (scrt4 backup-key --save) or re-enrolling (scrt4 setup). The
     // daemon returns the new master key in the response so the CLI
-    // can drive that follow-up. Full two-phase rotation that also
-    // re-wraps master.key under a fresh PRF is a future follow-up.
+    // can drive that follow-up. `rotate_vault_local` below is the
+    // two-phase rotation for the local passkey; the phone's master.key
+    // is still a follow-up.
     #[serde(rename = "rotate_vault")]
     RotateVault,
+
+    /// Rotate with the local passkey — phase 1: start the approval page.
+    /// The ceremony IS the step-up, and its PRF output re-wraps
+    /// master-local.key under the new key, so the passkey keeps working.
+    #[serde(rename = "rotate_vault_local")]
+    RotateVaultLocal,
+
+    /// Rotate with the local passkey — phase 2: wait for the approval, then
+    /// re-encrypt the vault and re-wrap master-local.key under the new key.
+    #[serde(rename = "rotate_vault_local_complete")]
+    RotateVaultLocalComplete,
 
     // ── Core: Encrypted-folder inventory (F027, F028) ──────────
     //
