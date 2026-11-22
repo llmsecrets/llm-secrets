@@ -971,7 +971,7 @@ async fn handle_unlock_local_complete(ttl: Option<u64>) -> Response {
 
     pending.server.shutdown();
 
-    let auth_result = match webauthn::complete_authentication(&encrypted_payload, &pending.wrapping_key) {
+    let auth_result = match webauthn::complete_authentication_local(&encrypted_payload, &pending.wrapping_key) {
         Ok(r) => r,
         Err(e) => return Response::error(format!("WebAuthn auth failed: {}", e)),
     };

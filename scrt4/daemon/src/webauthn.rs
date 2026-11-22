@@ -456,6 +456,23 @@ pub fn complete_authentication(
     encrypted_payload: &str,
     wrapping_key: &str,
 ) -> Result<AuthResult, String> {
+    complete_authentication_via(encrypted_payload, wrapping_key, "relay")
+}
+
+/// Complete authentication from the localhost approval page. Same payload as the
+/// relay's; only the log line differs, so a local unlock is not logged as a relay one.
+pub fn complete_authentication_local(
+    encrypted_payload: &str,
+    wrapping_key: &str,
+) -> Result<AuthResult, String> {
+    complete_authentication_via(encrypted_payload, wrapping_key, "localhost")
+}
+
+fn complete_authentication_via(
+    encrypted_payload: &str,
+    wrapping_key: &str,
+    via: &str,
+) -> Result<AuthResult, String> {
     let engine = base64::engine::general_purpose::STANDARD;
     let data = decrypt_relay_payload(encrypted_payload, wrapping_key)?;
 
@@ -471,7 +488,7 @@ pub fn complete_authentication(
     let mut prf_output = [0u8; 32];
     prf_output.copy_from_slice(&prf_bytes);
 
-    tracing::info!("WebAuthn authentication completed via relay");
+    tracing::info!("WebAuthn authentication completed via {}", via);
     Ok(AuthResult { prf_output })
 }
 
