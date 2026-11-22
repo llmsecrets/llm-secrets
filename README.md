@@ -300,6 +300,7 @@ not differ per operating system. The archive branch is kept indefinitely.
 ## Contributing
 
 - Issues and PRs against [`scrt4/`](./scrt4) are welcome.
+- Building and running it locally: [BUILD.md](./BUILD.md). Working on it with a coding agent: [AGENTS.md](./AGENTS.md) (also read by Claude Code via `CLAUDE.md`).
 - Security issues: email `security@llmsecrets.com` or open a private security advisory on this repo. Do not file public issues for vulnerabilities.
 - There is no external audit yet. One is planned for 2026; community review is explicitly invited in the meantime.
 
