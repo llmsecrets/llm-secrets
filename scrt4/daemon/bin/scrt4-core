@@ -990,6 +990,8 @@ _wa_gate() {
             _done=$(send_request '{"method":"unlock_local_complete","params":{"ttl":7200}}' 180 2>/dev/null || true)
             echo "" >&2
             if [ "$(echo "$_done" | jq -r '.success // false' 2>/dev/null)" = "true" ]; then
+                # the ceremony starts a new session with a new token; without it the gated command is refused.
+                _save_session_token "$(echo "$_done" | jq -r '.data.session_token // empty')"
                 echo -e "${GREEN}WebAuthn verified.${NC}" >&2
                 return 0
             fi
