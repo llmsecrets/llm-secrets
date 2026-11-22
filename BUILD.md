@@ -17,6 +17,14 @@ libraries. `webauthn-rs` is deliberately *not* a dependency: the WebAuthn
 ceremony runs in the browser, and the daemon only ever handles the AES-GCM
 wrapped PRF output.
 
+The bash client (Linux, macOS, WSL) also needs:
+
+| Tool | Why |
+|---|---|
+| `bash`, `jq` | the client is a bash script that reads the daemon's JSON replies with `jq` |
+| `socat` **or** `python3` | to talk to the daemon's Unix socket (socat first, python3 otherwise) |
+| Chrome (or another browser) | for the local passkey page (`setup --local`, `unlock --local`) |
+
 Platform extras, only if you want the optional client-side pieces:
 
 | Platform | Extra | For |
@@ -97,6 +105,95 @@ Then add `%LOCALAPPDATA%\scrt4` to `PATH` and open a new terminal.
 
 The daemon communicates over a named pipe (`scrt4-<user>`) rather than a Unix
 socket, and unlock runs through Windows Hello on `localhost:9474`.
+
+---
+
+## Run your local build (Linux, macOS, WSL)
+
+After the build and install steps above, `~/.local/bin` holds `scrt4` (the bash client) and `scrt4-daemon`.
+Make sure `~/.local/bin` is on your `PATH`.
+
+### 1. Start the daemon
+
+```bash
+scrt4 daemon          # runs in the foreground; leave this terminal open
+# or in the background:
+scrt4-daemon &
+```
+
+Check it from another terminal:
+
+```bash
+scrt4 status          # {"success":true,"data":{"active":false,...}} = running, vault locked
+```
+
+"Daemon not reachable" means it is not running, or it is running with a different `XDG_RUNTIME_DIR`.
+To start it with your login session on Linux, use a systemd user unit:
+
+```ini
+# ~/.config/systemd/user/scrt4-daemon.service
+[Unit]
+Description=scrt4 daemon
+
+[Service]
+ExecStart=%h/.local/bin/scrt4-daemon
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
+```
+
+```bash
+systemctl --user daemon-reload && systemctl --user enable --now scrt4-daemon
+```
+
+### 2. First run: create the vault, then add this device's passkey
+
+```bash
+scrt4 setup             # one time: scan the QR code and register your phone's passkey
+scrt4 setup --local     # optional: add this device's passkey (Touch ID, Windows Hello, a YubiKey)
+```
+
+`setup --local` opens the daemon's approval page on `http://localhost:9474` in Chrome. To use it on a
+machine you reach over SSH, forward the port and open the printed URL on your own computer:
+`ssh -L 9474:127.0.0.1:9474 <host>`.
+
+### 3. Every day
+
+```bash
+scrt4 unlock --local    # unlock with this device's passkey (or: scrt4 unlock, with your phone)
+scrt4 add API_KEY=...   # add a secret
+scrt4 list              # names only, never values
+scrt4 run 'curl -H "Authorization: Bearer $env[API_KEY]" https://example.com'
+scrt4 lock              # end the session
+```
+
+Sensitive commands (`view`, `backup-key`, `rotate`, `setup --local`) ask for a fresh passkey approval
+each time. `rotate` with a local passkey re-wraps that passkey's copy of the key, so it keeps working
+afterwards. Your phone passkey needs `scrt4 setup` again after a rotate; `rotate` says so when that applies.
+
+### 4. Rebuild after pulling changes
+
+```bash
+cd llm-secrets && git pull
+(cd scrt4/daemon && cargo build --release)
+bash scrt4/scripts/build-scrt4.sh core-only ~/.local/bin/scrt4
+scrt4 lock                                   # restarting the daemon ends the session anyway
+pkill -x scrt4-daemon                        # or: systemctl --user stop scrt4-daemon
+install -m 755 scrt4/daemon/target/release/scrt4-daemon ~/.local/bin/scrt4-daemon
+scrt4-daemon &                               # or: systemctl --user start scrt4-daemon
+scrt4 unlock --local
+```
+
+### 5. Check what you are running
+
+```bash
+scrt4 --version         # a build from this repository reports a -community version
+(cd scrt4/daemon && cargo test)
+```
+
+Working on scrt4 itself, or letting an agent do it? Read **[AGENTS.md](./AGENTS.md)** first: it explains how
+to run a second, isolated daemon so tests never touch your real vault.
 
 ---
 
