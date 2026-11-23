@@ -579,12 +579,28 @@ trigger_push() {
         -o /dev/null 2>/dev/null &
 }
 
+# _no_browser — true when SCRT4_NO_BROWSER is set (1/true/yes). For a
+# server reached over SSH, where the passkey ceremony happens in a browser
+# on another machine through a tunnel to 127.0.0.1:9474: opening a browser
+# on the server would pop an unwanted window, or fail quietly on a headless
+# host. Callers still print the URL, so nothing else changes.
+_no_browser() {
+    case "${SCRT4_NO_BROWSER:-}" in
+        1|true|TRUE|yes|YES) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 # open_browser URL — open URL in the system browser. Supports WSL2
 # (cmd.exe), Linux (xdg-open), and macOS (open). Silent on failure —
 # callers should still print the URL to the terminal so the user has a
 # copyable fallback.
 open_browser() {
     local url="$1"
+    if _no_browser; then
+        echo -e "  ${YELLOW}SCRT4_NO_BROWSER is set: open the URL below in your browser.${NC}" >&2
+        return 0
+    fi
     if command -v wslpath >/dev/null 2>&1 && command -v cmd.exe >/dev/null 2>&1; then
         cmd.exe /c start "" "$url" >/dev/null 2>&1
     elif command -v xdg-open >/dev/null 2>&1; then
@@ -753,7 +769,7 @@ run_setup_flow() {
     #
     # Agent mode is excluded — it can't see a browser window, and its whole
     # purpose is a scrapeable terminal QR.
-    if [ "$FORCE_CLI" = false ] && _has_desktop; then
+    if [ "$FORCE_CLI" = false ] && ! _no_browser && _has_desktop; then
         open_ceremony_browser "$full_url"
         echo -e "  ${CYAN}(opened in your browser — use Touch ID / Windows Hello there,${NC}" >&2
         echo -e "  ${CYAN} or scan the QR with your phone)${NC}" >&2
@@ -834,6 +850,11 @@ ensure_unlocked() {
 # they can paste it wherever they like.
 open_ceremony_browser() {
     local url="$1"
+    if _no_browser; then
+        echo -e "  ${YELLOW}SCRT4_NO_BROWSER is set: open the URL below in your browser.${NC}" >&2
+        echo -e "  ${YELLOW}Over SSH, forward the port first: ssh -L 9474:127.0.0.1:9474 <host>${NC}" >&2
+        return 0
+    fi
     local os
     os=$(uname -s 2>/dev/null || echo unknown)
 

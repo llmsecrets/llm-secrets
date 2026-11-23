@@ -157,6 +157,8 @@ scrt4 setup --local     # optional: add this device's passkey (Touch ID, Windows
 `setup --local` opens the daemon's approval page on `http://localhost:9474` in Chrome. To use it on a
 machine you reach over SSH, forward the port and open the printed URL on your own computer:
 `ssh -L 9474:127.0.0.1:9474 <host>`.
+Set `SCRT4_NO_BROWSER=1` on that machine so scrt4 only prints the URL instead of also opening a browser
+there (`export SCRT4_NO_BROWSER=1`, or put it in your shell profile).
 
 ### 3. Every day
 

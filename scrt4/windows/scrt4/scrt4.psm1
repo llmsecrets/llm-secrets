@@ -206,6 +206,22 @@ function Test-Scrt4Unlocked {
 # WebAuthn step-up gate: localhost browser flow first (Windows Hello),
 # remote QR flow as fallback -- the v0.1.0 monolith behavior.
 #
+# Open-Scrt4Url -- open an approval page in the default browser, unless
+# SCRT4_NO_BROWSER is set (1/true/yes): then only say so, and the caller's
+# printed URL is the way in. For a machine reached over SSH, where the
+# passkey ceremony runs in a browser on another computer through a tunnel to
+# 127.0.0.1:9474. Returns $true when a browser was opened.
+function Open-Scrt4Url {
+    param([string]$Url)
+    if ("$env:SCRT4_NO_BROWSER" -match '^(1|true|yes)$') {
+        Write-Host '  SCRT4_NO_BROWSER is set: open the URL below in your browser.'
+        Write-Host '  Over SSH, forward the port first: ssh -L 9474:127.0.0.1:9474 <host>'
+        return $false
+    }
+    Start-Process $Url | Out-Null
+    return $true
+}
+
 function Invoke-Scrt4WaGate {
     if ($script:DevMode -and -not $script:ForceAuth) { return $true }
 
@@ -217,7 +233,7 @@ function Invoke-Scrt4WaGate {
     if ($start -and $start.success) {
         $url = $start.data.url
         Write-Info 'Opening browser for authentication...'
-        Start-Process $url | Out-Null
+        [void](Open-Scrt4Url $url)
         Write-Host "  URL: $url"
         Write-Host '  Authenticate in the browser window.'
         Write-Host ''
@@ -284,9 +300,10 @@ function Show-Scrt4RelayChallenge {
     # Native Windows: also open the auth page locally so a desktop
     # passkey (Windows Hello) can complete the ceremony without a phone.
     try {
-        Start-Process $Url | Out-Null
-        Write-Host '  (opened in your browser -- you can use Windows Hello there,'
-        Write-Host '   or scan the QR with your phone)'
+        if (Open-Scrt4Url $Url) {
+            Write-Host '  (opened in your browser -- you can use Windows Hello there,'
+            Write-Host '   or scan the QR with your phone)'
+        }
     } catch {
         Write-Host '  Scan the QR code with your phone camera.'
     }
@@ -375,7 +392,7 @@ function Invoke-Scrt4LocalUnlock {
 
     $url = $resp.data.url
     Write-Info 'Opening browser for authentication...'
-    Start-Process $url | Out-Null
+    [void](Open-Scrt4Url $url)
     Write-Host "  URL: $url"
     Write-Host '  Authenticate in the browser window (Windows Hello).'
     Write-Host ''
@@ -471,7 +488,7 @@ function Invoke-Scrt4LocalSetup {
 
     $url = $resp.data.url
     Write-Info 'Adding localhost passkey (wraps existing master key)...'
-    Start-Process $url | Out-Null
+    [void](Open-Scrt4Url $url)
     Write-Host "  URL: $url"
     Write-Host '  Register a passkey in the browser window (Windows Hello).'
     Write-Host ''
@@ -674,7 +691,7 @@ function Invoke-CmdUnlock {
             if ($check.success) {
                 $url = $check.data.url
                 Write-Info 'Opening browser for authentication...'
-                Start-Process $url | Out-Null
+                [void](Open-Scrt4Url $url)
                 Write-Host "  URL: $url"
                 Write-Host '  Authenticate in the browser window (Windows Hello).'
                 Write-Host ''
